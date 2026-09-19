@@ -5,8 +5,12 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import physics_server as service
 
+class FakeModel:
+    # physics_server.dispatch() reads sim.model.particle_count for the sponsor_obs breadcrumb.
+    particle_count=0
+
 class FakeSimulation:
-    def __init__(self,*args):pass
+    def __init__(self,*args):self.model=FakeModel()
     def step(self,*args):return {'peakMm':0,'minimumVolumeRatio':1}
     def info(self):return {'engine':'test'}
 

@@ -1,11 +1,16 @@
 numpy<2
-open3d==0.18.0
+# 0.18.0 is the last release with Python 3.9 wheels (the macOS .venv ceiling, see AGENTS.md).
+# It has no wheels for 3.12+, so newer interpreters take the nearest release that does.
+open3d==0.18.0; python_version < "3.12"
+open3d==0.19.0; python_version >= "3.12"
 plyfile==1.0.3
 Pillow>=10,<12
 trimesh>=4,<5
 pycolmap==3.13.0
 xatlas==0.0.11
 networkx>=3.2,<4
+# Imported directly by the geometry/texture scripts; it used to arrive only as a transitive dependency.
+scipy>=1.10,<2
 
 openai>=2,<3
 

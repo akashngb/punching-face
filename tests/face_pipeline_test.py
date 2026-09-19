@@ -5,6 +5,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PIL import Image
 from face_pipeline import FaceStore
 import openai_capture
+import private_files
 
 def frame(yaw=0):
     im=Image.new('RGBA',(64,64),(130,90,70,255));im.putpixel((0,0),(255,123,45,0));b=io.BytesIO();im.save(b,format='PNG')
@@ -99,7 +100,7 @@ class CaptureTests(unittest.TestCase):
             code,result=self.store.route(Request(),urlparse('/api/openai-config'));self.assertEqual(code,200);self.assertNotIn('test-secret',json.dumps(result))
     def test_key_saved_with_private_permissions(self):
         with patch.object(openai_capture,'CONFIG',Path(self.temp.name)/'secrets/openai.json'):
-            openai_capture.configure('sk-'+'x'*30);self.assertEqual(openai_capture.CONFIG.stat().st_mode&0o777,0o600)
+            openai_capture.configure('sk-'+'x'*30);self.assertEqual(private_files.holders(openai_capture.CONFIG),private_files.owner_only())
     def test_provider_errors_do_not_echo_key(self):
         from urllib.error import HTTPError
         with patch.object(openai_capture,'config',return_value=('sk-secret','gpt-4o-mini')),patch.object(openai_capture,'urlopen',side_effect=HTTPError('https://api.openai.com/v1/responses',401,'sk-secret',{},None)):

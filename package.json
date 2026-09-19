@@ -7,15 +7,15 @@
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
-    "test:reconstruction": ".venv/bin/python tests/reconstruction_test.py",
-    "fixtures": ".venv/bin/python scripts/make_fixture.py",
-    "sponsors": ".venv/bin/python sponsor_server.py",
+    "test:reconstruction": "node scripts/py.mjs tests/reconstruction_test.py",
+    "fixtures": "node scripts/py.mjs scripts/make_fixture.py",
+    "sponsors": "node scripts/py.mjs sponsor_server.py",
     "livekit:dev": "livekit-server --dev --bind 127.0.0.1",
     "build:guest": "vite build --config vite.guest.config.js",
-    "test:sponsors": ".venv/bin/python tests/sponsor_server_test.py && .venv/bin/python tests/sponsor_obs_test.py",
-    "omni:smoke": ".venv/bin/python scripts/omni_smoke_test.py",
-    "omni:report": ".venv/bin/python scripts/omni_usage_report.py",
-    "omni:relay": ".venv/bin/python omni_relay.py"
+    "test:sponsors": "node scripts/py.mjs tests/sponsor_server_test.py && node scripts/py.mjs tests/sponsor_obs_test.py",
+    "omni:smoke": "node scripts/py.mjs scripts/omni_smoke_test.py",
+    "omni:report": "node scripts/py.mjs scripts/omni_usage_report.py",
+    "omni:relay": "node scripts/py.mjs omni_relay.py"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.5.0",

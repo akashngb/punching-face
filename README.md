@@ -6,7 +6,7 @@ A local Three.js head-model workflow: webcam photographs → recovered cameras �
 
 The OMNI engine (Realtime WebSocket → Qwen3.5-Omni) is described under [OMNI integration](#omni-integration) below: architecture, capabilities, privacy, env vars, and run commands.
 
-Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, the Newton CPU service on 5175, the OMNI relay on 5177. All bind to loopback.
+Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, the Newton CPU service on 5175, the OMNI relay on 5177. All bind to loopback. The Cornerman/Arena coach panel additionally needs `npm run sponsors` (5176) in a second terminal; without it the panel reports that sponsor services are off and the rest of the app is unaffected.
 
 ## Capture and build
 
@@ -40,6 +40,19 @@ python3.13 -m venv .local/newton-env
 .local/newton-env/bin/python -m pip install -r requirements-newton.txt
 npm run dev
 ```
+
+On Windows a venv puts its interpreter in `Scripts/python.exe` rather than `bin/python`; `npm run dev` and the other `npm` scripts resolve that themselves, so only the commands typed by hand change:
+
+```powershell
+npm install
+py -3.12 -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt
+py -3.12 -m venv .local/newton-env
+.local/newton-env/Scripts/python -m pip install -r requirements-newton.txt
+npm run dev
+```
+
+`open3d==0.18.0` has no wheels past Python 3.11, so `requirements.txt` takes 0.19.0 from 3.12 onward; the 3.9 pin the macOS `.venv` depends on is unchanged. The secret stores under `.local/secrets/` cannot rely on POSIX modes there — `private_files.restrict()` resets the ACL to the owner alone instead — and cancelling a reconstruction worker uses CTRL_BREAK and `taskkill /T` in place of process-group signals.
 
 MediaPipe/WASM assets are under `public/`. The head mask uses the official MediaPipe multiclass selfie segmenter, anchored to the initial frontal head box so rear frames do not depend on face detection. `scripts/setup_assets.py` can restore public models; it also contains legacy asset setup. The old Gaussian research utilities remain on disk for provenance but are not invoked by the active face builder.
 
@@ -131,7 +144,7 @@ The **existing pipeline** (reconstruction, rigging, render, hand tracking, colli
 - Voice control (emotion + style flow through the persona and instructions)
 - Voice cloning (Plan A; smoke-test verifies availability at the gateway)
 
-Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-realtime` via `OMNI_REALTIME_MODEL` when latency headroom allows.
+Models: `qwen3.5-omni-plus-realtime` by default — it is on the sponsored key's enabled list and `qwen3.5-omni-flash-realtime` is not. Voice `Ethan`; `Cherry`/`Chelsie` return 400 on yibuapi.
 
 ### Privacy and safety
 
@@ -152,7 +165,7 @@ cp .env.example .env      # then fill in OMNI_API_KEY and any endpoints/models
 npm run dev
 ```
 
-`npm run dev` starts Vite (5173), the reconstruction API (5174), the physics service (5175), and the OMNI relay (5177) in one process supervisor.
+`npm run dev` starts Vite (5173), the reconstruction API (5174), the physics service (5175), and the OMNI relay (5177) in one process supervisor. It does **not** start the sponsor services (5176) that back the Cornerman/Arena panel — run `npm run sponsors` alongside it.
 
 ### Environment variables
 

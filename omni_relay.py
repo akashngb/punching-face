@@ -34,7 +34,8 @@ from urllib.parse import urlparse, urlencode
 
 ROOT = Path(__file__).resolve().parent
 SECRETS = ROOT / '.local/secrets'
-PORT = 5177
+# Overridable so a test instance never collides with (and silently tests) a running dev relay.
+PORT = int(os.environ.get('OMNI_RELAY_PORT') or 5177)
 ORIGINS = ('http://127.0.0.1:5173', 'http://localhost:5173')
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 LOG_TAG = '[omni-relay]'
@@ -67,8 +68,10 @@ ENV_MAP = {
 DEFAULTS = {
     'baseUrl': 'https://yibuapi.com/v1',
     'model': 'qwen3.5-omni-flash',
-    'realtimeModel': 'qwen3.5-omni-flash-realtime',
-    'voice': 'Cherry',
+    # Both verified against the sponsored key (TRACKS/OMNI.md): qwen3.5-omni-flash-realtime
+    # is not on its enabled list, and Cherry/Chelsie return 400 InvalidParameter on yibuapi.
+    'realtimeModel': 'qwen3.5-omni-plus-realtime',
+    'voice': 'Ethan',
 }
 
 

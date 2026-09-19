@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {capturePython} from '../scripts/venv.mjs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import net from 'node:net';
@@ -92,12 +93,14 @@ function connectWs(port) {
 }
 
 test('relay boots, upgrades a client, and echoes mock events', async () => {
-  const port = 5177;
-  const child = spawn('.venv/bin/python', ['omni_relay.py'], {
+  // Not 5177: `npm run dev` holds that, and binding would fail while the probe still found
+  // a listener -- the test would then exercise the live relay instead of this mock one.
+  const port = 5188;
+  const child = spawn(capturePython, ['omni_relay.py'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     // OMNI_ENABLED=false forces the relay into mock mode regardless of .env.
-    env: {...process.env, OMNI_ENABLED: 'false', OMNI_API_KEY: '', OMNI_REALTIME_URL: ''},
+    env: {...process.env, OMNI_ENABLED: 'false', OMNI_API_KEY: '', OMNI_REALTIME_URL: '', OMNI_RELAY_PORT: String(port)},
   });
   try {
     const listening = await waitForListen(port, 5000);

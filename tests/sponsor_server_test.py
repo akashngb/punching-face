@@ -1,6 +1,6 @@
 """Sponsor services: tokens verify, secrets stay private, the coach stream is well formed,
 and nothing answers a non-local or cross-origin caller. No network and no real keys."""
-import base64,hashlib,hmac,json,os,stat,sys,tempfile,threading,unittest
+import base64,hashlib,hmac,json,os,sys,tempfile,threading,unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request,urlopen
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import sponsor_server as service
+import private_files
 
 def decode(part):return json.loads(base64.urlsafe_b64decode(part+'='*(-len(part)%4)))
 ORIGIN={'Origin':'http://127.0.0.1:5173','Content-Type':'application/json'}
@@ -72,7 +73,7 @@ class SponsorServer(unittest.TestCase):
     def test_settings_are_written_private_and_never_returned(self):
         saved=json.load(self.post('/sponsors/settings',{'group':'omni','apiKey':'sk-test-123','model':'qwen3.5-omni-flash'}))
         self.assertEqual(saved,{'saved':['apiKey','model']});path=service.SECRETS/'omni.json'
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600);self.assertEqual(stat.S_IMODE(service.SECRETS.stat().st_mode),0o700)
+        self.assertEqual(private_files.holders(path),private_files.owner_only());self.assertEqual(private_files.holders(service.SECRETS),private_files.owner_only())
         config=urlopen(Request(self.base+'/sponsors/config',headers={'Origin':ORIGIN['Origin']}),timeout=10).read().decode()
         self.assertNotIn('sk-test-123',config);self.assertTrue(json.loads(config)['omni']['configured'])
         path.unlink()

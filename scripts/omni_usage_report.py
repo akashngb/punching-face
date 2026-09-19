@@ -4,8 +4,14 @@
 Runs the sponsor's canonical `summarize_usage.py` against `.local/usage/yibu_api_calls.jsonl`
 and writes to `.local/usage/summary/`. Then prints a redaction reminder.
 
+The ledger is per-machine: every laptop that made a call has its own
+`.local/usage/yibu_api_calls.jsonl`. Pass the teammates' copies as extra
+arguments and they are merged (de-duplicated by `call_id`) before summarizing,
+otherwise the totals only cover this machine.
+
 Usage:
-    .venv/bin/python scripts/omni_usage_report.py
+    npm run omni:report                                  # this machine only
+    npm run omni:report -- ../from-akash.jsonl ../from-jace.jsonl
 
 The two files to attach to the submission email:
     .local/usage/summary/usage_summary.json
@@ -23,19 +29,51 @@ OUT_DIR = ROOT / '.local/usage/summary'
 SUMMARIZE = ROOT / '.local/third_party/yibuapi-examples/yibuapi_examples_20260918_v01/summarize_usage.py'
 
 
+def merge(extra: list[str]) -> Path:
+    """Concatenate this machine's ledger with teammates' copies, de-duplicated by call_id."""
+    seen, rows = set(), []
+    for source in [LEDGER, *(Path(e) for e in extra)]:
+        if not source.is_file():
+            print(f'skipping {source}: not a file', file=sys.stderr)
+            continue
+        for line in source.read_text(encoding='utf-8').splitlines():
+            if not line.strip():
+                continue
+            try:
+                call_id = json.loads(line).get('call_id')
+            except ValueError:
+                print(f'skipping unparseable row in {source}', file=sys.stderr)
+                continue
+            if call_id in seen:
+                continue
+            seen.add(call_id)
+            rows.append(line)
+    merged = OUT_DIR / 'merged_yibu_api_calls.jsonl'
+    merged.parent.mkdir(parents=True, exist_ok=True)
+    merged.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    print(f'merged {len(rows)} unique calls from {1 + len(extra)} ledger(s)')
+    return merged
+
+
 def main() -> int:
     if not SUMMARIZE.is_file():
         print(f'Sponsor package not extracted at {SUMMARIZE.parent}. Fetch and extract '
               'yibuapi_examples_20260918_v01.tar.gz into .local/third_party/yibuapi-examples/.',
               file=sys.stderr)
         return 2
-    if not LEDGER.is_file():
-        print(f'No ledger at {LEDGER}. Run the app and trigger at least one OMNI call first.', file=sys.stderr)
+    extra = sys.argv[1:]
+    # Whoever compiles the report may not be the one who made the calls, so teammates'
+    # ledgers alone are enough; only the no-ledger-anywhere case is an error.
+    if not extra and not LEDGER.is_file():
+        print(f'No ledger at {LEDGER}, and no teammate ledgers given. Run the app and trigger at '
+              'least one OMNI call, or pass the ledgers from the other machines as arguments.',
+              file=sys.stderr)
         return 3
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    ledger = merge(extra) if extra else LEDGER
     subprocess.check_call([
         sys.executable, str(SUMMARIZE),
-        '--log', str(LEDGER),
+        '--log', str(ledger),
         '--out-dir', str(OUT_DIR),
     ])
     summary_path = OUT_DIR / 'usage_summary.json'
@@ -51,6 +89,12 @@ def main() -> int:
     print()
     print('Before sending: `source.path` in the JSON is an absolute local path — sanitize if needed.')
     print('Do NOT include the full API key, prompts, or the raw ledger in the reply.')
+    print()
+    print('The reply must also state, per docs/yibuapi-usage-reporting.md:')
+    for field in ('team name', 'project link', 'application email', 'reporting period',
+                  'key suffixes (last 4 only)', 'any gaps in logging'):
+        print(f'  - {field}')
+    print('If no API calls were made, say so explicitly instead of omitting the report.')
     return 0
 
 

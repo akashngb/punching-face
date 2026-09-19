@@ -94,8 +94,8 @@ def resolve_config() -> dict:
         'base_url': (pick('OMNI_BASE_URL', 'baseUrl', 'https://yibuapi.com/v1') or '').rstrip('/'),
         'realtime_url': pick('OMNI_REALTIME_URL', 'realtimeUrl'),
         'model': pick('OMNI_MODEL', 'model', 'qwen3.5-omni-flash'),
-        'realtime_model': pick('OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-flash-realtime'),
-        'voice': pick('OMNI_VOICE', 'voice', 'Cherry'),
+        'realtime_model': pick('OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-plus-realtime'),
+        'voice': pick('OMNI_VOICE', 'voice', 'Ethan'),
         'cloned_voice': pick('OMNI_CLONED_VOICE_ID', 'clonedVoiceId'),
     }
 

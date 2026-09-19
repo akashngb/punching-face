@@ -53,7 +53,10 @@ Both transports verified end-to-end 2026-09-19:
 - [x] **Apply for API credits.** Team key delivered 2026-09-19. Never commit the key. Stored 0600 at `.local/secrets/omni.json` and `.env`.
 - [x] **Smoke test the key.** `.venv/bin/python scripts/omni_smoke_test.py` picks Plan A. Report at `.local/omni-smoke/report.json`.
 - [x] **Confirm gateway capabilities.** Realtime WS available. Voice cloning NOT available on yibuapi (`/audio/voices` 404). Accepted voices for this key: Ethan / Serena / Dylan.
-- [ ] **Log every call.** `.local/usage/yibu_api_calls.jsonl` is the ledger, written by all three entry points. `npm run omni:report` generates the two files organizers require.
+- [x] **Log every call.** Sponsor package extracted to `.local/third_party/yibuapi-examples/`, so
+  `yibu_audit.append_audit_record` now resolves instead of silently falling back to `None` — before that,
+  every call would have gone unrecorded with no warning. Ledger: `.local/usage/yibu_api_calls.jsonl`.
+  **The extraction is per-machine**: check `append_audit_record` is not `None` on any laptop that will make calls.
 - [ ] **Submit report by 2026-09-20 23:59 EDT.** Attach `usage_summary.json` and `usage_by_model_key_purpose.csv` to a reply to the approval email.
 
 ---
@@ -138,7 +141,7 @@ If the OMNI session drops mid-round, the classifier keeps firing local physical 
 - Voice control (emotion + style flow through the persona and instructions)
 - Voice cloning (Plan A only; smoke-test verifies availability at the gateway — not offered by yibuapi)
 
-Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-realtime` via `OMNI_REALTIME_MODEL` when latency headroom allows.
+Models: `qwen3.5-omni-plus-realtime` by default — it is on the sponsored key's enabled list and `qwen3.5-omni-flash-realtime` is not. Voice `Ethan`; `Cherry`/`Chelsie` return 400 on yibuapi.
 
 ---
 
@@ -147,6 +150,10 @@ Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-rea
 Every API call is recorded to a JSONL ledger at `.local/usage/yibu_api_calls.jsonl` — the smoke test, the relay's Realtime bridge, and the sponsor_server's Plan-C fallback all write to it via the canonical `yibu_audit.append_audit_record` writer (imported from the sponsor's example package under `.local/third_party/`).
 
 Records include the call id, timestamps, model, key suffix (last 4 chars only, never the full key), purpose, endpoint, transport, ok/fail, latency, and token counts.
+
+The ledger is a **local file per machine**. Whoever compiles the submission must collect the other
+laptops' copies and pass them to `npm run omni:report -- <path> <path>`, which merges and de-duplicates
+by `call_id`; otherwise the totals silently cover one machine only.
 
 Before submitting, run `npm run omni:report`, inspect the outputs, and reply to the approval email with **only** `usage_summary.json` and `usage_by_model_key_purpose.csv` attached. Never include the full key, raw prompts, or the ledger itself.
 

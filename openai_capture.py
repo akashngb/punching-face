@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from PIL import Image
+from private_files import restrict
 ROOT=Path(__file__).resolve().parent
 CONFIG=ROOT/'.local/secrets/openai.json'
 SCHEMA={'type':'object','properties':{'usableForMultiview':{'type':'boolean'},'problems':{'type':'array','items':{'type':'string'}},'nextCaptureInstruction':{'type':'string'}},'required':['usableForMultiview','problems','nextCaptureInstruction'],'additionalProperties':False}
@@ -15,10 +16,10 @@ def config():
 def configure(key,model='gpt-4o-mini'):
     if not isinstance(key,str) or not re.fullmatch(r'sk-[A-Za-z0-9_-]{20,250}',key):raise ValueError('Enter a valid API key. It is saved only on this server.')
     if model not in ('gpt-4o-mini','gpt-4o'):raise ValueError('Choose a supported vision review model.')
-    CONFIG.parent.mkdir(parents=True,exist_ok=True);CONFIG.parent.chmod(0o700)
+    CONFIG.parent.mkdir(parents=True,exist_ok=True);restrict(CONFIG.parent)
     fd=os.open(CONFIG,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
     with os.fdopen(fd,'w') as f:json.dump({'apiKey':key,'model':model},f)
-    CONFIG.chmod(0o600)
+    restrict(CONFIG)
 
 def request(content,schema=SCHEMA,*,model_override=None,max_output_tokens=500,reasoning=None,timeout=60):
     key,model=config();model=model_override or model

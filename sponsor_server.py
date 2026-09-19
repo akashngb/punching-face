@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 import base64,hashlib,hmac,json,os,re,socket,sys,time,urllib.error,urllib.request,uuid
 import sponsor_obs
+from private_files import restrict
 
 # yibuapi call ledger (Huawei OMNI Live challenge requires per-call recording).
 # Import the sponsor's canonical writer from `.local/third_party/` without copying
@@ -57,7 +58,7 @@ def save_secret(kind,data):
         if not isinstance(value,str) or len(value)>600 or not value.isprintable():raise ValueError('Settings must be short printable text.')
         clean[key]=value.strip()
     if not clean:raise ValueError('Nothing to save.')
-    SECRETS.mkdir(parents=True,exist_ok=True);os.chmod(SECRETS,0o700);path=SECRETS/(kind+'.json')
+    SECRETS.mkdir(parents=True,exist_ok=True);restrict(SECRETS);path=SECRETS/(kind+'.json')
     merged={}
     try:merged=json.loads(path.read_text())
     except (OSError,ValueError):pass
@@ -65,7 +66,7 @@ def save_secret(kind,data):
     # Create the file already private; never widen permissions, even briefly.
     fd=os.open(str(tmp),os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
     with os.fdopen(fd,'w') as out:json.dump(merged,out)
-    tmp.replace(path);return sorted(clean)
+    tmp.replace(path);restrict(path);return sorted(clean)
 
 def local_livekit_up():
     try:

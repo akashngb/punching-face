@@ -74,6 +74,7 @@ test('stale webcam samples and reacquisition cannot produce a phantom punch',asy
   tracking.active=true;tracking.armProfiles.set('left',f.profile);tracking.bodyFrame=f.frame;
   tracking.results={timestamp:1000,landmarks:[Array.from({length:21},(_,i)=>({x:.7+i*.001,y:.5,z:0}))],handedness:[[{categoryName:'Left'}]],worldLandmarks:[f.handWorld],pose:{timestamp:1000,landmarks:[f.image],worldLandmarks:[f.world]}};
   await tracking.tick(1005,hands);assert.equal(hands[0].tracked,true);assert.equal(hands[0].updated,false);
-  await tracking.tick(1400,hands);assert.equal(hands[0].tracked,false);assert.equal(hands[0].armPose,null);
-  tracking.results.timestamp=1450;tracking.results.pose.timestamp=1450;await tracking.tick(1460,hands);assert.equal(hands[0].tracked,true);assert.equal(hands[0].updated,false);near(hands[0].previous,hands[0].center);
+  // The silence window in hands.js is 1 s, so the drop has to be probed past it.
+  await tracking.tick(2100,hands);assert.equal(hands[0].tracked,false);assert.equal(hands[0].armPose,null);
+  tracking.results.timestamp=2150;tracking.results.pose.timestamp=2150;await tracking.tick(2160,hands);assert.equal(hands[0].tracked,true);assert.equal(hands[0].updated,false);near(hands[0].previous,hands[0].center);
 });

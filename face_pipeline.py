@@ -8,6 +8,20 @@ try:from sponsor_obs import child_env as trace_env
 except ImportError:trace_env=lambda:None
 ROOT=Path(__file__).resolve().parent
 
+# The worker spawns further subprocesses, so cancelling it has to reach the whole tree.
+# POSIX gets a session of its own and signals the group; Windows has no process groups to
+# signal, so CTRL_BREAK reaches the worker's own group and taskkill ends the tree outright.
+if os.name=='nt':
+    DETACHED={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP}
+    def stop_worker(pid,force):
+        if force:subprocess.run(['taskkill','/F','/T','/PID',str(pid)],capture_output=True)
+        else:
+            try:os.kill(pid,signal.CTRL_BREAK_EVENT)
+            except OSError:raise ProcessLookupError(pid) from None
+else:
+    DETACHED={'start_new_session':True}
+    def stop_worker(pid,force):os.killpg(pid,signal.SIGKILL if force else signal.SIGTERM)
+
 def atomic(path,data):
     tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(data,allow_nan=False));tmp.replace(path)
 
@@ -184,7 +198,7 @@ class FaceStore:
             try:
                 log=(folder/'pipeline.log').open('w')
                 script='build_photo_face.py';flags=[] if cloud else ['--local-only']
-                try:p=subprocess.Popen([sys.executable,str(ROOT/'scripts'/script),str(folder)]+flags,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,env=trace_env())
+                try:p=subprocess.Popen([sys.executable,str(ROOT/'scripts'/script),str(folder)]+flags,stdout=log,stderr=subprocess.STDOUT,**DETACHED,env=trace_env())
                 finally:log.close()
             except Exception:
                 self.gpu_lock.release();interrupt_timing(folder);atomic(folder/'status.json',{'status':'failed','stage':'start','message':'Could not start reconstruction.'});raise
@@ -194,7 +208,7 @@ class FaceStore:
     def _wait(self,identifier,p,done):
         try:
             try:p.wait(timeout=1800)
-            except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait()
+            except subprocess.TimeoutExpired:stop_worker(p.pid,True);p.wait()
             with self.lock:
                 folder=self.root/identifier
                 if folder.exists():
@@ -208,11 +222,11 @@ class FaceStore:
         with self.lock:
             folder=self.folder(identifier);job=self.jobs.get(identifier);self.deleting.add(identifier)
             if job:
-                try:os.killpg(job[0].pid,signal.SIGTERM)
+                try:stop_worker(job[0].pid,False)
                 except ProcessLookupError:pass
         if job:
             if not job[1].wait(5):
-                try:os.killpg(job[0].pid,signal.SIGKILL)
+                try:stop_worker(job[0].pid,True)
                 except ProcessLookupError:pass
                 if not job[1].wait(5):
                     with self.lock:self.deleting.discard(identifier)
@@ -225,11 +239,11 @@ class FaceStore:
         # A development-server restart must not leave orphan trainers behind.
         with self.lock:jobs=list(self.jobs.values())
         for process,done in jobs:
-            try:os.killpg(process.pid,signal.SIGTERM)
+            try:stop_worker(process.pid,False)
             except ProcessLookupError:pass
         for process,done in jobs:
             if not done.wait(3):
-                try:os.killpg(process.pid,signal.SIGKILL)
+                try:stop_worker(process.pid,True)
                 except ProcessLookupError:pass
                 done.wait(3)
     def route(self,handler,url):
