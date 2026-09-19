@@ -23,7 +23,7 @@ export class SurfaceAppearance extends THREE.Mesh {
       shader.vertexShader=shader.vertexShader.replace('void main() {','attribute vec3 restNormal; varying vec3 contactNormal; varying vec3 captureNormal; void main() {').replace('#include <begin_vertex>','#include <begin_vertex>\n contactNormal=normalize(normalMatrix*normal); captureNormal=normalize(normalMatrix*restNormal);');
       shader.fragmentShader=shader.fragmentShader.replace('void main() {','varying vec3 contactNormal; varying vec3 captureNormal; void main() {').replace('#include <opaque_fragment>','vec3 lightDirection=normalize(vec3(-0.4,0.65,1.)); float deformedLight=.55+.45*max(dot(normalize(contactNormal),lightDirection),0.); float capturedLight=.55+.45*max(dot(normalize(captureNormal),lightDirection),0.); outgoingLight*=clamp(deformedLight/capturedLight,.55,1.35);\n #include <opaque_fragment>');
     };
-    this.material.customProgramCacheKey=()=> 'photographic-contact-shading-v1';
+    this.material.customProgramCacheKey=()=> 'photographic-punching-face-shading-v1';
   }
   remap(array){const result=new Float32Array(this.mapping.length*3);for(let i=0;i<this.mapping.length;i++){const from=this.mapping[i]*3,to=i*3;result[to]=array[from];result[to+1]=array[from+1];result[to+2]=array[from+2];}return result;}
   updateSurface(position,normal){

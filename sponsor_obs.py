@@ -8,7 +8,7 @@ bodies are never attached; only names, durations, counts and status.
 from contextlib import contextmanager
 from pathlib import Path
 import json,os
-ROOT=Path(__file__).resolve().parent;ENABLED=False;SERVICE='contact'
+ROOT=Path(__file__).resolve().parent;ENABLED=False;SERVICE='punching-face'
 try:import sentry_sdk
 except Exception:sentry_sdk=None
 # The structured-log API is a submodule, not an attribute: probing with hasattr() would silently drop every log.
@@ -32,7 +32,7 @@ def init(service,transport=None):
     global ENABLED,SERVICE
     SERVICE=service;dsn,environment=_dsn()
     if not sentry_sdk or not (dsn or transport):return False
-    options=dict(dsn=dsn or 'https://public@o0.ingest.sentry.io/0',environment=environment,traces_sampler=_sampler,send_default_pii=False,max_request_body_size='never',include_local_variables=False,server_name='contact-'+service)
+    options=dict(dsn=dsn or 'https://public@o0.ingest.sentry.io/0',environment=environment,traces_sampler=_sampler,send_default_pii=False,max_request_body_size='never',include_local_variables=False,server_name='punching-face-'+service)
     if transport:options['transport']=transport
     try:sentry_sdk.init(enable_logs=True,profile_session_sample_rate=1.0,profile_lifecycle='trace',**options)
     except TypeError:sentry_sdk.init(**options)  # older sentry-sdk without logs/continuous profiling
@@ -111,17 +111,65 @@ def patch_pipeline_timer():
     PipelineTimer.mark,PipelineTimer.finish=traced_mark,traced_finish
 
 @contextmanager
-def ai_span(model,system):
-    """Shaped for Sentry's AI agent monitoring (gen_ai.* attributes)."""
+def stage(op,name,**data):
+    """Generic child span for cold-start / hot-path phases. No-op without Sentry."""
+    if not ENABLED:
+        yield None;return
+    with sentry_sdk.start_span(op=op,name=name) as span:
+        for key,value in data.items():
+            if value is not None:span.set_data(key,value)
+        yield span
+
+def note(**tags):
+    """Attach short tags to the active transaction so Sentry can filter by them."""
+    if not ENABLED:return
+    for key,value in tags.items():
+        if value is None:continue
+        sentry_sdk.set_tag(key,str(value)[:100])
+
+# Rough OpenAI-compatible price table (USD per 1M tokens). Approximate at time of writing;
+# adjust when the gateway publishes rates. Used only for gen_ai.usage.cost_usd on spans.
+AI_PRICES={
+    'qwen3.5-omni-flash':(0.10,0.30),'qwen3.5-omni-plus':(0.30,0.90),'qwen3.5-omni-plus-realtime':(0.60,1.80),
+    'gpt-6-astra':(2.50,10.00),'gpt-image-2':(0.00,0.00),
+}
+def _cost_usd(model,usage):
+    if not usage:return None
+    prices=AI_PRICES.get((model or '').lower())
+    if not prices:return None
+    inp,out=prices
+    return round(((usage.get('prompt_tokens',0) or 0)*inp+(usage.get('completion_tokens',0) or 0)*out)/1_000_000,6)
+
+@contextmanager
+def ai_span(model,system,**shape):
+    """Shaped for Sentry's AI agent monitoring (gen_ai.* attributes).
+
+    `shape` accepts non-PII request descriptors: messages_count, system_prompt_len,
+    frames_attached, audio_ms, has_voice, temperature, max_tokens, etc. Never prompts
+    or images: send_default_pii is off and this is deliberately narrow.
+    """
     if not ENABLED:
         yield None;return
     with sentry_sdk.start_span(op='gen_ai.chat',name='chat '+model) as span:
         span.set_data('gen_ai.operation.name','chat');span.set_data('gen_ai.system',system);span.set_data('gen_ai.request.model',model)
+        for key,value in shape.items():
+            if value is None:continue
+            span.set_data('gen_ai.request.'+key,value)
         yield span
 
-def ai_usage(span,usage,first_token_ms,frames):
+def ai_usage(span,usage,first_token_ms,frames,finish_reason=None,model=None):
     if not span:return
     usage=usage or {}
     for key,field in (('gen_ai.usage.input_tokens','prompt_tokens'),('gen_ai.usage.output_tokens','completion_tokens'),('gen_ai.usage.total_tokens','total_tokens')):
         if usage.get(field) is not None:span.set_data(key,usage[field])
-    span.set_data('coach.first_token_ms',first_token_ms);span.set_data('coach.frames_sent',frames)
+    cost=_cost_usd(model,usage)
+    if cost is not None:span.set_data('gen_ai.usage.cost_usd',cost)
+    if finish_reason:span.set_data('gen_ai.response.finish_reason',str(finish_reason)[:40])
+    span.set_data('gen_ai.response.first_token_ms',first_token_ms);span.set_data('gen_ai.request.frames_attached',frames)
+
+def ai_error(span,status,detail=None):
+    """Turn an HTTP failure from the gateway into a first-class AI span outcome."""
+    if not span:return
+    span.set_status('unknown_error' if status>=500 else 'invalid_argument')
+    span.set_data('gen_ai.response.finish_reason','error');span.set_data('gen_ai.response.http_status',int(status))
+    if detail:span.set_data('gen_ai.response.error_class',str(detail)[:40])

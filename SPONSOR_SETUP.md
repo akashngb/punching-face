@@ -1,6 +1,6 @@
 # Sponsor features: setup, run, demo
 
-Three additions to CONTACT, built Sat Sep 19 at Hack the North 2026. Strategy and rubrics: [SPONSOR_TRACKS.md](SPONSOR_TRACKS.md).
+Three additions to PUNCHING FACE, built Sat Sep 19 at Hack the North 2026. Strategy and rubrics: [SPONSOR_TRACKS.md](SPONSOR_TRACKS.md).
 
 | Feature | Sponsor track | What it does |
 |---|---|---|
@@ -22,7 +22,7 @@ npm run livekit:dev    # local LiveKit server (already installed: brew `livekit`
 
 A **Cornerman · Arena** pill appears bottom-right. With no keys at all you get: a clearly labelled **mock** coach, and a
 fully working Arena where guests are other tabs on this computer (`/guest.html`). If `npm run sponsors` is not running,
-the pill says so and the rest of CONTACT is untouched.
+the pill says so and the rest of PUNCHING FACE is untouched.
 
 Tests: `npm test` (JS, includes `tests/sponsors*.test.mjs`) and `npm run test:sponsors` (Python).
 
@@ -77,7 +77,7 @@ anyone holding the id can mint tokens for your project. Switch it off after the 
  guest device                         LiveKit                     host laptop (this repo)
  ───────────────                      ───────                     ─────────────────────────
  MediaPipe hands (on device) ─ punch events, ~60 bytes ─────────► arena-host.js → clamp + rate-limit
- pads (fallback, no camera)                                        → window.__contactLab.remotePunch()
+ pads (fallback, no camera)                                        → window.__punchingFace.remotePunch()
                                                                    → contact() → Newton physics
  <video> ◄──────────── 3D head, WebGL canvas @30 fps ◄──────────── canvas.captureStream()
  toast / vibrate ◄──── hit · zone · speed · scoreboard ◄────────── telemetry.js (who, where, how hard)
@@ -97,7 +97,7 @@ was lost in an edit: restore it rather than deleting the test):
 | File | Hook |
 |---|---|
 | `index.html` | second `<script>` loading `src/sponsors/boot.js` |
-| `src/main.js` | appended `window.__contactLab.remotePunch` (the only way a remote hit reaches `contact()`) |
+| `src/main.js` | appended `window.__punchingFace.remotePunch` (the only way a remote hit reaches `contact()`) |
 | `server.py`, `physics_server.py` | two lines before `serve_forever()` |
 | `face_pipeline.py` | import + `env=trace_env()` on the pipeline `Popen` |
 | `scripts/build_photo_face.py` | `__main__` wraps `run()` in the trace |
@@ -172,4 +172,4 @@ file so the dev server reloads the host: the session **rejoins by itself** and t
 - The dev server reloads every open page on any source edit (including Codex's). Sessions now survive that, but a
   reload costs ~5–10 s while Newton re-opens; guests see "No contact: the head is still loading" meanwhile.
 - Keep the host tab **visible**: browsers pause rendering in background tabs, which freezes the stream and the physics.
-- The physics service allows 4 sessions; every open CONTACT tab holds one for up to 2 minutes after closing.
+- The physics service allows 4 sessions; every open PUNCHING FACE tab holds one for up to 2 minutes after closing.

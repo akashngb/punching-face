@@ -1,4 +1,4 @@
-# Open-source stack for CONTACT: what to use on this Mac, and why results are missing
+# Open-source stack for PUNCHING FACE: what to use on this Mac, and why results are missing
 
 Researched and fetched 2026-09-19. Companion to [README.md](README.md) and [RESEARCH.md](RESEARCH.md).
 Sources live in `.local/third_party/` (hidden folder; in Finder press Cmd+Shift+. to show it).

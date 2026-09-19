@@ -6,7 +6,7 @@ import {downsample,encodeWav,bytesToBase64,base64ToBytes,pcm16ToFloat32,rms,Voic
 import {EventStream} from './sse.js';
 import {obs} from './sentry.js';
 
-const TAP="class Tap extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('contact-tap',Tap)";
+const TAP="class Tap extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('punching-face-tap',Tap)";
 const FRAME_MS=20,PREROLL_FRAMES=15,KEYFRAME_MS=700,KEYFRAMES=4,QUIET_AFTER_TURN_MS=7000,PUNCHES_PER_CUE=8;
 
 export function createCornerman({api,panel,config,stats,refreshConfig}){
@@ -111,7 +111,7 @@ export function createCornerman({api,panel,config,stats,refreshConfig}){
       try{
         mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
         await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TAP],{type:'application/javascript'})));
-        node=new AudioWorkletNode(ctx,'contact-tap');node.port.onmessage=e=>onAudio(e.data);ctx.createMediaStreamSource(mic).connect(node);
+        node=new AudioWorkletNode(ctx,'punching-face-tap');node.port.onmessage=e=>onAudio(e.data);ctx.createMediaStreamSource(mic).connect(node);
         status('Learning the room noise… then just talk.');setTimeout(()=>enabled&&!busy&&status('Listening. Ask “how is my guard?” or throw a combo.'),900);
       }catch(error){status('No microphone ('+error.name+'). Typed questions still work.',true);obs.warn('coach.mic_unavailable',{reason:error.name});}
       obs.crumb('coach','started',{vision:el.vision.checked,voice:el.voice.checked});window.dispatchEvent(new CustomEvent('cornerman:audio',{detail:streamOut.stream}));

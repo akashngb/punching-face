@@ -1,8 +1,12 @@
-# CONTACT — photo head reconstruction and contact prototype
+# Punching Face — photo head reconstruction and contact prototype
 
 A local Three.js head-model workflow: webcam photographs → recovered cameras → personalized face geometry → head/hair completion → photographic texture → facial controls → Newton soft-tissue contact. The active face pipeline does not train or render Gaussian splats.
 
-Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, and the Newton CPU service on 5175. All three bind to loopback.
+**Arena** — a punching prototype at `/`. Reconstruction, rigging, rendering, hand tracking, collision and deformation perform exactly as before. The shared OMNI-driven sparring coach is opt-in behind `?arena_omni=1`.
+
+The OMNI engine (Realtime WebSocket → Qwen3.5-Omni) is described under [OMNI integration](#omni-integration) below: architecture, capabilities, privacy, env vars, and run commands.
+
+Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, the Newton CPU service on 5175, the OMNI relay on 5177. All bind to loopback.
 
 ## Capture and build
 
@@ -14,7 +18,7 @@ Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capt
 6. Optional AI completion sends selected cropped views to `gpt-6-astra`. Its structured response supplies bounded posterior shape parameters, hair color/flow/hairline priors, and per-view eyeglass rim/bridge/temple contours. Those parameters are executed by the local mesh builder and cached by capture hash in `astra-head-completion.json`. The AI cannot displace the measured face or neck cut, and recovered rear views take precedence over posterior shape priors. Missing crown hair uses continuous Cartesian triplanar synthesis, with no spherical texture pole. Eyewear is lifted through the recovered frontal camera into independent rim, lens, bridge and temple meshes. Visible profile contours constrain the temple paths against the fitted head; bevelled acetate sections, tapered arms, hinge plates and clear lenses replace circular tubes; masked frame ink is inpainted out of the skin texture. Occluded skin, eyewear depth and temple fit remain estimates. If fewer than three rear views were recovered, it also attempts a rear appearance prediction using the image API. A recovered 360-degree scan uses its rear photographs. Measured geometry, fitting, texture baking and Newton physics run locally.
 7. **Surface**, **Geometry** and **Wireframe** show the same editable mesh. Jaw, lip corner, brow and lid controls follow the facial anchors. The **3D glasses** checkbox shows or hides the rigid accessory. **Export GLB** exports the head, texture, four morphs and separate glasses meshes. **Save editable session** retains the rig, photo texture, glasses specification and Newton cage binding.
 
-The uploaded `IMG_7496.MOV` reconstruction uses recovered rear photographs; it does not need an AI-generated rear reference. An earlier frontal-only scan used a labeled rear prediction from Codex's built-in image tool because the configured account returned a zero image-input allowance for GPT Image 2. Subsequent captures with insufficient rear views try the image API; if it is unavailable, the pipeline reports the failure and uses local material continuation from captured hair samples. It does not pretend that continuation is an AI-generated rear photograph. The image stage uses the unmodified Image Generation skill CLI at `~/.codex/skills/.system/imagegen/scripts/image_gen.py`; set `CONTACT_IMAGE_CLI` to its location on another installation.
+The uploaded `IMG_7496.MOV` reconstruction uses recovered rear photographs; it does not need an AI-generated rear reference. An earlier frontal-only scan used a labeled rear prediction from Codex's built-in image tool because the configured account returned a zero image-input allowance for GPT Image 2. Subsequent captures with insufficient rear views try the image API; if it is unavailable, the pipeline reports the failure and uses local material continuation from captured hair samples. It does not pretend that continuation is an AI-generated rear photograph. The image stage uses the unmodified Image Generation skill CLI at `~/.codex/skills/.system/imagegen/scripts/image_gen.py`; set `PUNCHING_FACE_IMAGE_CLI` to its location on another installation.
 
 ## Newton contact and facial rig
 
@@ -82,3 +86,135 @@ The scan panel's **Video to model** card persists video duration, extraction/imp
 A fresh successful run of the 24.3-second `IMG_7496.MOV` took **3m 0.6s** on this Mac with AI completion enabled. See [PIPELINE_BENCHMARK.md](PIPELINE_BENCHMARK.md) for the stage breakdown and the earlier failed attempt. Both camera reconstruction and AI annotations were recomputed for that successful run.
 
 Source videos are stored as `.local/face-captures/<id>/source-video` and replayed through a loopback-only API with byte-range seeking. `source.json` stores the filename/duration/import measurement; `timing.json` stores reconstruction stages and attempts. These metadata files do not invalidate the image/camera cache hash. Deleting a scan also deletes its retained original video.
+
+## OMNI integration
+
+The full strategy lives in [`TRACKS/OMNI.md`](TRACKS/OMNI.md). This section is the shipped summary: what runs, why, and how to work with it.
+
+### Why multimodal for Arena
+
+| Modality | Arena |
+| --- | --- |
+| Vision (video frames) | Stance, dropped guard, telegraphed punches |
+| Speech in (voice) | "hold on", trash-talk, breathing |
+| Speech out | Grunts, taunts, coaching callouts |
+| Language | Opponent persona, round summary |
+
+Your hands are busy and your eyes are on the target, so **voice + vision is the only possible interface** during a live round. A chatbot can't see your guard drop; a vision-only model can't answer "how did I look on that combo?"
+
+### Architecture
+
+```
+Browser  ──►  frame worker (1–2 fps JPEG ~512 px) ─┐
+        ──►  audio worklet (20 ms PCM16 mono 16 kHz) ─┤
+                                                       ▼
+Physics  ──►  contact classifier ──►  event bus  ──►  OmniSession (WebSocket)
+   │                                       │                  │
+   ▼                                       ▼                  ├──► speech audio ──► player
+cached reaction (< 50 ms)      text context "[EVENT] …"        └──► tool calls ──► dispatcher ──► rig/UI
+
+                                              key held ▼
+                                        127.0.0.1:5177 (omni_relay.py)
+                                              upstream ▼
+                                     wss://<gateway>/…realtime  (Qwen3.5-Omni)
+                                                or
+                                       Plan C: sponsor_server.py /coach/turn
+```
+
+The **existing pipeline** (reconstruction, rigging, render, hand tracking, collision, deformation) runs on-device unchanged. OMNI runs beside it, never in its critical path. Frame encoding and mic capture live in a worker and an AudioWorklet respectively; network I/O is async; the render loop is not touched.
+
+### OMNI capabilities used
+
+- Streaming audio + image (frame) input, text + audio output, over WebSocket
+- Semantic interruption / barge-in (the AudioCapture voice gate + `session.cancelResponse()`)
+- Function calling (per-scenario tool registries in `src/scenarios/*/tools.js`)
+- Voice control (emotion + style flow through the persona and instructions)
+- Voice cloning (Plan A; smoke-test verifies availability at the gateway)
+
+Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-realtime` via `OMNI_REALTIME_MODEL` when latency headroom allows.
+
+### Privacy and safety
+
+- **Scan consent gate:** subject faces the camera and says a consent phrase; OMNI verifies face and phrase before scanning proceeds. Uses vision + voice in one 30 second gate.
+- **Key custody:** the API key lives in `.env` or `.local/secrets/omni.json` (mode 0600) and never leaves the relay process. The browser never sees the key.
+- **Session-scoped data:** meshes and any cloned voice are deleted when the tab closes. Only downscaled frames and audio ever leave the machine, and only while the route is active.
+
+### Setup
+
+```sh
+npm install
+python3.9 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+python3.13 -m venv .local/newton-env
+.local/newton-env/bin/python -m pip install -r requirements-newton.txt
+
+cp .env.example .env      # then fill in OMNI_API_KEY and any endpoints/models
+npm run dev
+```
+
+`npm run dev` starts Vite (5173), the reconstruction API (5174), the physics service (5175), and the OMNI relay (5177) in one process supervisor.
+
+### Environment variables
+
+See [`.env.example`](.env.example) for the canonical list. Key ones:
+
+- `OMNI_ENABLED` — master switch (default `true`). Set `false` to keep the routes running with OMNI off.
+- `OMNI_API_KEY` — required for Plan A/B/C. Apply at https://luma.com/0fhypcu0.
+- `OMNI_BASE_URL` — chat/completions gateway (Plan C).
+- `OMNI_REALTIME_URL` — WebSocket endpoint (Plan A/B). Confirm with the smoke test.
+- `OMNI_MODEL`, `OMNI_REALTIME_MODEL`, `OMNI_VOICE`.
+- `OMNI_CLONED_VOICE_ID` — set once cloning is registered.
+- `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` — fallback voice + `scripts/build_reactions.py`.
+
+Precedence: process env > `.env` > `.local/secrets/omni.json`. Keys never ship to the browser.
+
+### Run commands
+
+- `npm run dev` — full stack including the OMNI relay.
+- `npm run sponsors` — sponsor_server only (Cornerman/Arena chat path stays on 5176).
+- `npm run omni:smoke` — smoke test; picks Plan A/B/C, writes to `.local/omni-smoke/report.json`. Every call it makes goes into the audit ledger.
+- `npm run omni:relay` — the relay standalone.
+- `npm run omni:report` — turn the audit ledger into `usage_summary.json` + `usage_by_model_key_purpose.csv` under `.local/usage/summary/`. **Required for submission.**
+- `.venv/bin/python scripts/build_reactions.py` — pre-generate ElevenLabs cached reactions (fallback voice, not the OMNI voice).
+- `node --test tests/*.test.mjs` — full JS test suite (OMNI engine + relay end-to-end + existing pipeline).
+
+### Usage reporting (Huawei OMNI Live challenge)
+
+Per the sponsor's rules, every API call the app makes is recorded to a JSONL
+ledger at `.local/usage/yibu_api_calls.jsonl` — the smoke test, the relay's
+Realtime bridge, and the sponsor_server's Plan-C fallback all write to it via
+the canonical `yibu_audit.append_audit_record` writer (imported from the
+sponsor's example package under `.local/third_party/`). Records include the
+call id, timestamps, model, key suffix (last 4 chars only, never the full
+key), purpose, endpoint, transport, ok/fail, latency, and token counts.
+
+Before submitting, run `npm run omni:report`, inspect the outputs, and reply
+to the approval email with **only** `usage_summary.json` and
+`usage_by_model_key_purpose.csv` attached. Never include the full key, raw
+prompts, or the ledger itself in the reply.
+
+### Latency overlay
+
+Press `Ctrl-L` on either route to toggle a small fixed-corner overlay showing per-hop timings: contact→event, event→relay, contact→cached audio, last frame sent, speech end, first delta, response done, plan/mock/session id. `docs/perf.md` captures baselines and post-OMNI numbers side by side.
+
+### Fallback plans
+
+- **Plan A** — the gateway supports Realtime WebSocket (**confirmed on yibuapi 2026-09-19**). Streaming text + audio + `video_tokens`, tool calls, and per-turn usage in `response.done`. `qwen3.5-omni-plus-realtime` + voice `Ethan`. No voice cloning on this gateway.
+- **Plan B** — the gateway lacks Realtime but Alibaba's DashScope intl endpoint works. Same code path as Plan A with the endpoint swapped.
+- **Plan C** — chat/completions per turn → ElevenLabs voice. The relay auto-detects this; the scenarios keep the same UI. Loses semantic interruption and streaming but keeps the loop functional.
+
+If the OMNI session drops mid-encounter, the classifier keeps firing local physical reactions and cached audio while a small "reconnecting" badge appears; the client reconnects with exponential backoff.
+
+### Limitations
+
+- Voice cloning depends on the gateway's `/audio/voices` shape; the smoke test verifies. If unavailable we ship a stock OMNI voice with emotion control.
+- The round summary is heuristic today; when OMNI is live the model's tool calls override the heuristic, and at least one summary line is judged from vision.
+
+### Future work
+
+- Multi-participant rounds (each boxer is a separate LiveKit participant; the coach addresses them by name).
+- Headset support (WebXR passthrough; the scene coords are already metric).
+
+## Demo scripts and rehearsal
+
+See [`DEMO.md`](DEMO.md) for the 3-minute Arena script.

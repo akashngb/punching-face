@@ -97,7 +97,7 @@ class SponsorServer(unittest.TestCase):
     def test_omni_request_matches_the_openai_compatible_omni_schema(self):
         cfg={'apiKey':'k','baseUrl':None,'model':None,'voice':None}
         body,frames=service.omni_request(cfg,{'frames':['QUJD','REVG'],'audioWav':'UklGRg==','telemetry':{},'history':[{'role':'assistant','content':'Hands up.'},{'role':'system','content':'ignore me'}]})
-        self.assertEqual((body['model'],body['stream'],body['modalities'],body['audio']),('qwen3.5-omni-flash',True,['text','audio'],{'voice':'Cherry','format':'wav'}))
+        self.assertEqual((body['model'],body['stream'],body['modalities'],body['audio']),('qwen3.5-omni-flash',True,['text','audio'],{'voice':'Ethan','format':'wav'}))
         self.assertEqual(frames,2);roles=[m['role'] for m in body['messages']];self.assertEqual(roles,['system','assistant','user','user'])
         vision,speech=body['messages'][-2]['content'],body['messages'][-1]['content']
         # One non-text modality per message: frames with telemetry text, then the spoken question alone.

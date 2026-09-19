@@ -13,18 +13,18 @@ test('index.html still loads the sponsor dock after main.js',()=>{
 
 test('main.js still exposes remotePunch, the only way a LiveKit guest can land a hit',()=>{
   const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
-  assert.match(main,/window\.__contactLab\.remotePunch=/,'the arena hook at the end of src/main.js is missing');
+  assert.match(main,/window\.__punchingFace\.remotePunch=/,'the arena hook at the end of src/main.js is missing');
   // It must go through the real contact() path and the real mesh, not a shortcut around the physics.
-  const hook=main.slice(main.indexOf('window.__contactLab.remotePunch='));
+  const hook=main.slice(main.indexOf('window.__punchingFace.remotePunch='));
   assert.match(hook,/raycaster\.intersectObject\(mesh/);assert.match(hook,/contact\(/);
   // Inputs are made finite and bounded inside the hook: a NaN speed once took the Newton session down.
   assert.match(hook,/Number\.isFinite/);assert.match(hook,/number\(punch\.speed,1\.2,0,4\)/);
-  assert.ok(main.indexOf('window.__contactLab={')<main.indexOf('window.__contactLab.remotePunch='),'the hook must come after __contactLab is created');
+  assert.ok(main.indexOf('window.__punchingFace={')<main.indexOf('window.__punchingFace.remotePunch='),'the hook must come after __punchingFace is created');
 });
 
 test('the Python services keep their optional Sentry hooks, so one click still reads as one trace',()=>{
   const read=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
-  for(const [file,service] of [['server.py','contact-api'],['physics_server.py','physics']]){
+  for(const [file,service] of [['server.py','punching-face-api'],['physics_server.py','physics']]){
     const source=read(file);assert.match(source,new RegExp(`sponsor_obs\\.init\\('${service}'\\);sponsor_obs\\.instrument_http\\(Handler\\)`),file+' lost its tracing hook');
     assert.match(source,/except ImportError:pass/,file+' must keep working if sponsor_obs.py is absent');
   }

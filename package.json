@@ -1,5 +1,5 @@
 {
-  "name": "contact-spatial-lab",
+  "name": "punching-face",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,15 @@
     "sponsors": ".venv/bin/python sponsor_server.py",
     "livekit:dev": "livekit-server --dev --bind 127.0.0.1",
     "build:guest": "vite build --config vite.guest.config.js",
-    "test:sponsors": ".venv/bin/python tests/sponsor_server_test.py && .venv/bin/python tests/sponsor_obs_test.py"
+    "test:sponsors": ".venv/bin/python tests/sponsor_server_test.py && .venv/bin/python tests/sponsor_obs_test.py",
+    "omni:smoke": ".venv/bin/python scripts/omni_smoke_test.py",
+    "omni:report": ".venv/bin/python scripts/omni_usage_report.py",
+    "omni:relay": ".venv/bin/python omni_relay.py"
   },
   "dependencies": {
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
     "@mediapipe/tasks-vision": "0.10.32",
     "@sentry/browser": "^10.75.0",
     "@sparkjsdev/spark": "2.2.0",

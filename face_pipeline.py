@@ -45,7 +45,7 @@ class FaceStore:
         with self.lock:
             folder=self.root/uuid.uuid4().hex
             for name in ('images','masks'):(folder/name).mkdir(parents=True,exist_ok=True)
-            atomic(folder/'capture.json',{'format':'contact-face-capture','version':1,'frames':[],'captureRegion':capture_region,'horizontalFovDegrees':fov})
+            atomic(folder/'capture.json',{'format':'punching-face-capture','version':1,'frames':[],'captureRegion':capture_region,'horizontalFovDegrees':fov})
             atomic(folder/'status.json',{'status':'captured','stage':'capture','message':'Ready to receive face frames.'})
             return {'id':folder.name,'frames':0}
     def append(self,identifier,frames):

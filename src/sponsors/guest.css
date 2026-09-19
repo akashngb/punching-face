@@ -1,4 +1,4 @@
-/* Guest page: phone-first, one screen, big targets. Shares CONTACT's greens on a dark ring. */
+/* Guest page: phone-first, one screen, big targets. Shares PUNCHING FACE's greens on a dark ring. */
 :root{color-scheme:dark;font-family:'DM Sans',system-ui,sans-serif;font-size:15px;--line:#2b3a32;--muted:#8fa093;--green:#3f9a5f;--accent:#d2eea4}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:#121a16;color:#e6efe0;overscroll-behavior:none}
 #guest{min-height:100dvh;display:flex;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}

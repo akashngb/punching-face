@@ -13,7 +13,7 @@ function fixture(){
   const shoulder=v(-.19,-.21,.04),elbow=v(-.20,-.40,-.15),wrist=v(-.14,-.24,-.36),hand=[wrist.clone()];
   for(let f=0;f<5;f++)for(let j=0;j<4;j++)hand.push(wrist.clone().add(v((2-f)*.015,.03+j*.025,-.012-(f===0?.01:0))));
   const joints=[shoulder,elbow,wrist,...hand];
-  const bundle={format:'contact-arm',version:1,side:'left',joints:joints.map(p=>p.toArray()),mesh:{positions:[-.2,-.3,-.1,-.18,-.3,-.1,-.19,-.29,-.1],indices:[0,1,2],colors:[.5,.4,.3,.5,.4,.3,.5,.4,.3]},evidence:{testFixture:true}};
+  const bundle={format:'punching-face-arm',version:1,side:'left',joints:joints.map(p=>p.toArray()),mesh:{positions:[-.2,-.3,-.1,-.18,-.3,-.1,-.19,-.29,-.1],indices:[0,1,2],colors:[.5,.4,.3,.5,.4,.3,.5,.4,.3]},evidence:{testFixture:true}};
   const profile=capturedArmProfile(bundle);
   const world=Array.from({length:33},()=>object(v(0,0,0))),image=Array.from({length:33},()=>({x:.5,y:.5,z:0,visibility:1,presence:1}));
   const camera=p=>object(v(-p.x,-p.y,p.z));

@@ -8,7 +8,7 @@ import {obs} from './sentry.js';
 const randomRoom=()=>'ring-'+Math.random().toString(36).slice(2,6);
 // The dev server reloads this page whenever any source file changes, which would otherwise end a live
 // session mid-demo. The session is remembered per tab and rejoined with the same identity after a reload.
-const SESSION='contact-arena-session';
+const SESSION='punching-face-arena-session';
 const saved=()=>{try{return JSON.parse(sessionStorage.getItem(SESSION)||'null');}catch{return null;}};
 const remember=value=>{try{value?sessionStorage.setItem(SESSION,JSON.stringify(value)):sessionStorage.removeItem(SESSION);}catch{/* private mode */}};
 
@@ -56,16 +56,16 @@ export function createArenaHost({api,panel,config,stats,refreshConfig,coach,reco
     if(message?.type==='ping')return void send({type:'pong',t:message.t},{reliable:false,destinationIdentities:[participant.identity]});
     const punch=sanitizePunch(message);if(!punch||!limit.allow(participant.identity,performance.now()))return;
     const name=participant.name||participant.identity;
-    if(!window.__contactLab?.remotePunch){
+    if(!window.__punchingFace?.remotePunch){
       // The hook at the end of main.js was lost in an edit. Degrade to the scripted demo hook so the
       // room still sees a reaction, and say so plainly rather than failing silently.
       status('main.js lost its remotePunch hook (see tests/sponsors-hook.test.mjs). Falling back to the scripted left/right hook.',true);
       return void document.getElementById(punch.u<0?'left-hook':'right-hook')?.click();
     }
-    const landed=window.__contactLab.remotePunch({...punch,label:'REMOTE · '+name.toUpperCase()});
+    const landed=window.__punchingFace.remotePunch({...punch,label:'REMOTE · '+name.toUpperCase()});
     // Never drop a punch silently: right after a reload the physics session is still opening, and the
     // thrower deserves to know the head was not ready rather than wonder if their phone is broken.
-    if(!landed)return void send({type:'miss',id:participant.identity,reason:window.__contactLab.state?.physicsError?'physics error on the host':'the head is still loading'},{reliable:false,destinationIdentities:[participant.identity]});
+    if(!landed)return void send({type:'miss',id:participant.identity,reason:window.__punchingFace.state?.physicsError?'physics error on the host':'the head is still loading'},{reliable:false,destinationIdentities:[participant.identity]});
     const event=record(window.__lastContact,{id:participant.identity,name,side:punch.side});
     const t=tile(participant);t.classList.add('hit');setTimeout(()=>t.classList.remove('hit'),220);
     obs.crumb('arena','remote punch',{speed:punch.speed,kind:punch.kind,zone:event.zone});
@@ -100,7 +100,7 @@ export function createArenaHost({api,panel,config,stats,refreshConfig,coach,reco
           .on(lk.RoomEvent.ParticipantConnected,p=>{tile(p);status(`${p.name||p.identity} joined. ${next.remoteParticipants.size} in the ring.`);send({type:'board',board:stats.scoreboard()});})
           .on(lk.RoomEvent.ParticipantDisconnected,p=>{tiles.get(p.identity)?.remove();tiles.delete(p.identity);status(`${p.name||p.identity} left.`);})
           .on(lk.RoomEvent.Disconnected,()=>{if(room===next)stop('Disconnected from the room.');});
-        await next.connect(joined.url,joined.token);room=next;window.__arenaRoom=next;  // QA handle, like window.__contactLab
+        await next.connect(joined.url,joined.token);room=next;window.__arenaRoom=next;  // QA handle, like window.__punchingFace
         // The head itself: the WebGL canvas as a 30 fps video track. main.js creates the renderer with
         // preserveDrawingBuffer, so captured frames are never blank.
         capture=canvas.captureStream(30);

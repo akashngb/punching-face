@@ -1,6 +1,8 @@
 """Loopback reconstruction service; optional OpenAI review of selected face frames."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 import hashlib
 import json
@@ -8,6 +10,9 @@ import threading
 import subprocess
 import tempfile
 import sys
+import os
+import time
+import socket
 import base64
 import uuid
 import re
@@ -19,6 +24,18 @@ from scripts.collect_references import collect
 from face_pipeline import FaceStore
 
 ROOT = Path(__file__).parent
+
+def _load_dotenv(path):
+    if not path.exists():return
+    for raw in path.read_text().splitlines():
+        line=raw.strip()
+        if not line or line.startswith('#') or '=' not in line:continue
+        key,value=line.split('=',1)
+        key=key.strip()
+        value=value.strip().strip('"').strip("'")
+        if key and key not in os.environ:os.environ[key]=value
+
+_load_dotenv(ROOT/'.env')
 CACHE = ROOT / ".local" / "conversions"
 CACHE.mkdir(parents=True, exist_ok=True)
 LOCK = threading.Lock()
@@ -64,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
                 except (OSError,ValueError,KeyError):continue
             return self.reply(200,{'drafts':sorted(drafts,key=lambda d:d['savedAt'],reverse=True)})
         if url.path=='/api/saved-session':
-            path=ROOT/'.local/exports/contact-session.json'
+            path=ROOT/'.local/exports/punching-face-session.json'
             if not path.exists():return self.reply(404,{'error':'No saved session.'})
             return self.reply(200,json.loads(path.read_text()))
         if url.path=='/api/references':
@@ -94,6 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ("http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:5174"):
             return self.reply(403, {"error":"Only the local lab may request reconstruction."})
         if url.path in FACE_ROUTES:return self.face_request(url)
+        if url.path=='/api/meshy-headshot':return self.meshy_headshot()
         if url.path=='/api/reference-search':
             return self.reply(200,collect())
         if url.path=='/api/reference-evidence':
@@ -101,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
                 size=int(self.headers.get('Content-Length','0'))
                 if not 0<size<500_000:raise ValueError('Evidence payload too large.')
                 data=json.loads(self.rfile.read(size));identifier=data.get('referenceId','')
-                if data.get('format')!='contact-impact-evidence' or not re.fullmatch(r'user-[1-4]',identifier):raise ValueError('Invalid reference evidence.')
+                if data.get('format')!='punching-face-impact-evidence' or not re.fullmatch(r'user-[1-4]',identifier):raise ValueError('Invalid reference evidence.')
                 if len(data.get('landmarks',[]))!=468:raise ValueError('Expected 468 landmarks.')
                 path=ROOT/'.local/impact-references'/f'{identifier}-landmarks.json';path.write_text(json.dumps(data,allow_nan=False))
                 return self.reply(200,{'path':str(path)})
@@ -164,13 +182,13 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.rfile.read(size)
                 if kind == "json":
                     parsed = json.loads(body)
-                    if parsed.get("format") != "contact-session":
-                        raise ValueError("Not a Contact session")
+                    if parsed.get("format") != "punching-face-session":
+                        raise ValueError("Not a Punching Face session")
                 elif body[:4] != b"glTF":
                     raise ValueError("Not a binary glTF")
                 folder = ROOT / ".local" / "exports"
                 folder.mkdir(parents=True, exist_ok=True)
-                path = folder / ("contact-face.glb" if kind == "glb" else "contact-session.json")
+                path = folder / ("punching-face.glb" if kind == "glb" else "punching-face-session.json")
                 path.write_bytes(body)
                 return self.reply(200, {"path":str(path)})
             except (ValueError, OSError) as exc:
@@ -197,7 +215,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 # Open3D's native Poisson implementation may terminate the
                 # process on pathological topology. Isolate it from the server.
-                with tempfile.TemporaryDirectory(prefix="contact-") as temp:
+                with tempfile.TemporaryDirectory(prefix="punching-face-") as temp:
                     incoming = Path(temp) / ("source." + ext)
                     outgoing = Path(temp) / "mesh.json"
                     incoming.write_bytes(data)
@@ -215,6 +233,65 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(500, {"error":"Conversion failed. Check the server log and PLY format."})
         finally:
             LOCK.release()
+
+    def meshy_headshot(self):
+        key=os.environ.get('MESHY_API_KEY','').strip()
+        if not key:return self.reply(422,{'error':'MESHY_API_KEY is not configured on the server.'})
+        try:
+            size=int(self.headers.get('Content-Length','0'))
+            if not 0<size<=20_000_000:return self.reply(413,{'error':'Upload a JPEG or PNG smaller than 20 MB.'})
+            body=self.rfile.read(size)
+        except (ValueError,OSError) as exc:return self.reply(422,{'error':str(exc)})
+        if body[:8].startswith(b'\x89PNG\r\n\x1a\n'):mime='image/png'
+        elif body[:3]==b'\xff\xd8\xff':mime='image/jpeg'
+        else:return self.reply(422,{'error':'Send a JPEG or PNG photograph.'})
+        data_uri=f'data:{mime};base64,'+base64.b64encode(body).decode()
+        payload={'image_url':data_uri,'enable_pbr':True,'should_remesh':True,'should_texture':True,'ai_model':'latest','topology':'triangle','target_polycount':30000,'symmetry_mode':'auto'}
+        auth={'Authorization':'Bearer '+key,'Content-Type':'application/json'}
+        try:
+            create=Request('https://api.meshy.ai/openapi/v1/image-to-3d',data=json.dumps(payload).encode(),headers=auth)
+            with urlopen(create,timeout=60) as r:task=json.load(r)
+        except HTTPError as e:
+            detail=e.read().decode('utf-8','ignore')[:400]
+            print('meshy create HTTP',e.code,detail,flush=True)
+            return self.reply(422,{'error':f'Meshy rejected the request (HTTP {e.code}). {detail}'})
+        except (URLError,TimeoutError,socket.timeout):
+            return self.reply(504,{'error':'Meshy could not be reached from this computer.'})
+        task_id=task.get('result') or task.get('id')
+        if not task_id:return self.reply(422,{'error':'Meshy did not return a task id.'})
+        status_url=f'https://api.meshy.ai/openapi/v1/image-to-3d/{task_id}'
+        deadline=time.time()+600
+        state={}
+        while time.time()<deadline:
+            try:
+                with urlopen(Request(status_url,headers={'Authorization':'Bearer '+key}),timeout=60) as r:state=json.load(r)
+            except HTTPError as e:
+                return self.reply(422,{'error':f'Meshy status HTTP {e.code}.'})
+            except (URLError,TimeoutError,socket.timeout):
+                time.sleep(4);continue
+            status=state.get('status','')
+            if status=='SUCCEEDED':break
+            if status in ('FAILED','CANCELED','EXPIRED'):
+                message=(state.get('task_error') or {}).get('message') or status.lower()
+                return self.reply(422,{'error':f'Meshy task {status.lower()}: {message}'})
+            time.sleep(4)
+        else:
+            return self.reply(504,{'error':'Meshy task timed out after 10 minutes.'})
+        glb_url=(state.get('model_urls') or {}).get('glb')
+        if not glb_url:return self.reply(422,{'error':'Meshy did not return a GLB model URL.'})
+        try:
+            with urlopen(Request(glb_url),timeout=180) as r:glb_bytes=r.read()
+        except (HTTPError,URLError,TimeoutError,socket.timeout) as exc:
+            return self.reply(502,{'error':'Meshy GLB download failed: '+str(exc)})
+        if glb_bytes[:4]!=b'glTF':
+            return self.reply(502,{'error':'Meshy returned an unexpected model payload.'})
+        self.send_response(200)
+        self.send_header('Content-Type','model/gltf-binary')
+        self.send_header('Content-Length',str(len(glb_bytes)))
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Meshy-Task-Id',str(task_id))
+        self.end_headers()
+        self.wfile.write(glb_bytes)
 
     def face_request(self,url):
         if self.headers.get('Host','').split(':')[0] not in ('127.0.0.1','localhost'):
@@ -236,6 +313,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,shutdown_server)
     print("Local reconstruction: http://127.0.0.1:5174", flush=True)
     # Optional Sentry tracing (SPONSOR_SETUP.md): continues the browser's trace. A no-op without a DSN.
-    try:import sponsor_obs;sponsor_obs.init('contact-api');sponsor_obs.instrument_http(Handler)
+    try:import sponsor_obs;sponsor_obs.init('punching-face-api');sponsor_obs.instrument_http(Handler)
     except ImportError:pass
     ThreadingHTTPServer(("127.0.0.1", 5174), Handler).serve_forever()

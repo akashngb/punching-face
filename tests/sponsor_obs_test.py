@@ -94,10 +94,19 @@ class Observability(unittest.TestCase):
     def test_5_coach_calls_are_shaped_for_ai_monitoring(self):
         Memory.items.clear()
         with sentry_sdk.start_transaction(op='http.server',name='POST /sponsors/coach/turn'):
-            with sponsor_obs.ai_span('qwen3.5-omni-flash','yibuapi') as span:sponsor_obs.ai_usage(span,{'prompt_tokens':900,'completion_tokens':40,'total_tokens':940},612,4)
+            with sponsor_obs.ai_span('qwen3.5-omni-flash','yibuapi',messages_count=4,system_prompt_len=487,frames_attached=4,has_voice=True,temperature=0.7,max_tokens=140,audio_ms=1500) as span:
+                sponsor_obs.ai_usage(span,{'prompt_tokens':900,'completion_tokens':40,'total_tokens':940},612,4,finish_reason='stop',model='qwen3.5-omni-flash')
         spans=[s for s in streamed('span') if s['attributes'].get('sentry.op',{}).get('value')=='gen_ai.chat']
         self.assertEqual(len(spans),1);span=spans[0];self.assertEqual(span['name'],'chat qwen3.5-omni-flash');self.assertEqual(span['trace_id'],transactions()[0]['contexts']['trace']['trace_id'])
-        for key,value in {'gen_ai.operation.name':'chat','gen_ai.request.model':'qwen3.5-omni-flash','gen_ai.system':'yibuapi','gen_ai.usage.input_tokens':900,'gen_ai.usage.output_tokens':40,'gen_ai.usage.total_tokens':940,'coach.first_token_ms':612,'coach.frames_sent':4}.items():self.assertEqual(span['attributes'][key]['value'],value)
+        for key,value in {'gen_ai.operation.name':'chat','gen_ai.request.model':'qwen3.5-omni-flash','gen_ai.system':'yibuapi',
+                          'gen_ai.usage.input_tokens':900,'gen_ai.usage.output_tokens':40,'gen_ai.usage.total_tokens':940,
+                          'gen_ai.response.first_token_ms':612,'gen_ai.response.finish_reason':'stop',
+                          'gen_ai.request.frames_attached':4,'gen_ai.request.messages_count':4,'gen_ai.request.has_voice':True,
+                          'gen_ai.request.temperature':0.7,'gen_ai.request.max_tokens':140,'gen_ai.request.audio_ms':1500,
+                          'gen_ai.request.system_prompt_len':487}.items():
+            self.assertEqual(span['attributes'][key]['value'],value)
+        # Cost computed from the table in sponsor_obs.AI_PRICES ($0.10/M input + $0.30/M output for omni-flash).
+        self.assertAlmostEqual(span['attributes']['gen_ai.usage.cost_usd']['value'],round(900*0.10/1e6+40*0.30/1e6,6),places=6)
 
     def test_6_without_a_dsn_every_call_is_a_harmless_no_op(self):
         code="import sponsor_obs as o\nassert o.init('x') is False and o.ENABLED is False\no.capture(ValueError('x'));o.instrument_http(object);o.patch_pipeline_timer()\nassert 'SENTRY_TRACE' not in o.child_env()\nwith o.continue_from_env('x') as t:assert t is None\nwith o.ai_span('m','s') as s:o.ai_usage(s,None,1,0)\nprint('noop-ok')"

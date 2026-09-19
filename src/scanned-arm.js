@@ -6,7 +6,7 @@ import {ARM_PAIRS as PAIRS,capturedArmProfile,armBoneRotations} from './arm-pose
 export class ScannedArm extends THREE.Group {
   constructor(bundle){
     super();
-    if(bundle.format!=='contact-arm'||!bundle.mesh?.positions||bundle.joints?.length!==24)throw new Error('Choose a Contact arm reconstruction bundle with 24 measured joint anchors.');
+    if(bundle.format!=='punching-face-arm'||!bundle.mesh?.positions||bundle.joints?.length!==24)throw new Error('Choose a Punching Face arm reconstruction bundle with 24 measured joint anchors.');
     this.profile=capturedArmProfile(bundle);this.side=bundle.side;this.rest=this.profile.rest;
     const positions=bundle.mesh.positions,indices=bundle.mesh.indices,colorsIn=bundle.mesh.colors;
     if(!Array.isArray(positions)||positions.length%3||positions.length<9||positions.length>900000||!positions.every(Number.isFinite)||!Array.isArray(indices)||indices.length%3||!indices.every(i=>Number.isInteger(i)&&i>=0&&i<positions.length/3)||colorsIn?.length!==positions.length||!colorsIn.every(Number.isFinite))throw new Error('Arm bundle has invalid surface geometry or color data.');

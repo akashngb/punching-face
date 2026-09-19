@@ -19,7 +19,7 @@ export class ArmCapture {
   open(){$('arm-dialog').showModal();this.showLive();}
   showLive(){const video=$('arm-live');video.srcObject=this.tracking.stream;if(video.srcObject)video.play().catch(()=>{});}
   async start(){
-    await this.persist();await this.tracking.enableBody();this.frames=[];this.savedCount=0;this.signatures=[];this.sectors.clear();this.running=true;this.token++;this.started=performance.now();$('arm-start').disabled=true;$('arm-stop').disabled=false;$('arm-train').disabled=true;
+    await this.persist();await this.tracking.enableBody({wantSegmentation:true});this.frames=[];this.savedCount=0;this.signatures=[];this.sectors.clear();this.running=true;this.token++;this.started=performance.now();$('arm-start').disabled=true;$('arm-stop').disabled=false;$('arm-train').disabled=true;
     this.showLive();$('arm-live').scrollIntoView({block:'center'});
     $('arm-state').textContent='Capturing. Keep the entire arm and fist rigid while turning slowly.';
     this.timer=setInterval(()=>{if(this.frames.length>=100||performance.now()-this.started>90000){this.stop().catch(e=>$('arm-state').textContent=e.message);return;}this.tracking.captureRequest=this.side;},650);

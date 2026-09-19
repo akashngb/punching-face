@@ -1,15 +1,18 @@
 // Entry for the sponsor features. Loaded by its own <script> in index.html, after main.js, and
-// talks to the app only through window.__contactLab / window.__lastContact, so main.js stays as is.
+// talks to the app only through window.__punchingFace / window.__lastContact, so main.js stays as is.
 // If the sponsor service is not running, the app is untouched apart from one small offline pill.
 import './sponsors.css';
 import {RoundStats} from './telemetry.js';
 import {obs,initSentry,reportPhysics} from './sentry.js';
 import {createCornerman} from './cornerman.js';
 import {createArenaHost} from './arena-host.js';
+// The shared-engine Arena is a NO-OP unless the `arena_omni` flag is set.
+// Off = today's behaviour bit-for-bit (OMNI.md §5.3 cut order).
+import {enableArenaOmniIfFlagged} from '../scenarios/arena/engine-wire.js';
 
 const API='http://127.0.0.1:5176';
 let config=null,seen=0;const stats=new RoundStats();
-const remember=(key,value)=>{try{if(value===undefined)return localStorage.getItem('contact-sponsors-'+key);localStorage.setItem('contact-sponsors-'+key,value);}catch{return null;}};
+const remember=(key,value)=>{try{if(value===undefined)return localStorage.getItem('punching-face-sponsors-'+key);localStorage.setItem('punching-face-sponsors-'+key,value);}catch{return null;}};
 async function loadConfig(){const response=await fetch(API+'/sponsors/config');if(!response.ok)throw new Error('Sponsor service error.');config=await response.json();return config;}
 
 const dock=document.createElement('div');dock.id='sponsor-dock';dock.className=remember('open')==='1'?'':'collapsed';
@@ -23,7 +26,7 @@ function show(tab){for(const b of dock.querySelectorAll('[data-tab]'))b.classLis
 for(const b of dock.querySelectorAll('[data-tab]'))b.onclick=()=>show(b.dataset.tab);
 
 function offline(){
-  dock.querySelector('[data-panel=coach]').innerHTML=`<div class="sd-status">Sponsor services are not running, so the coach and the arena are off. The rest of CONTACT is unaffected.</div>
+  dock.querySelector('[data-panel=coach]').innerHTML=`<div class="sd-status">Sponsor services are not running, so the coach and the arena are off. The rest of PUNCHING FACE is unaffected.</div>
     <div class="sd-status">Start them with <code>npm run sponsors</code>, then:</div><div class="sd-row"><button class="primary" data-k="retry" style="flex:1">Retry</button></div>`;
   dock.querySelector('[data-k=retry]').onclick=start;dots.coach.className=dots.arena.className='sd-dot warn';show('coach');
 }
@@ -31,7 +34,7 @@ function offline(){
 async function start(){
   try{await loadConfig();}catch{return offline();}
   if(config.sentry.dsn){
-    try{await initSentry(config.sentry);reportPhysics(()=>window.__contactLab?.state);obs.tag('app','contact-host');}
+    try{await initSentry(config.sentry);reportPhysics(()=>window.__punchingFace?.state);obs.tag('app','punching-face-host');}
     catch(error){console.warn('Sentry did not start:',error);}
   }
   dots.obs.className='sd-dot'+(obs.enabled?' on':'');dots.obs.title=obs.enabled?'Sentry: tracing, logs and replay are on (webcam and 3D canvas are never recorded)':'Sentry: no DSN configured';
@@ -53,5 +56,8 @@ async function start(){
   show(remember('tab')||'coach');
   // Rejoin a session that a dev-server reload interrupted, once the head is loaded and the canvas has a size.
   const ready=setInterval(()=>{const canvas=document.querySelector('#stage canvas');if(window.__labReady&&canvas?.width>0){clearInterval(ready);if(arena.resume())show('arena');}},300);
+  // Opt-in shared-engine Arena. Users flip it via ?arena_omni=1 or by setting
+  // localStorage.'contact-sponsors-arena-omni'='1'. Sponsor Arena is unaffected.
+  enableArenaOmniIfFlagged({stats});
 }
 start();

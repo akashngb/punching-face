@@ -4,8 +4,14 @@ from pathlib import Path
 import json,re,threading,time,uuid
 import numpy as np
 from newton_face import NewtonFace,load_cage
+from contextlib import contextmanager
+try:import sponsor_obs
+except ImportError:sponsor_obs=None
+@contextmanager
+def _null():
+    yield None
 ROOT=Path(__file__).resolve().parent
-LOCK=threading.RLock();SESSIONS={}
+LOCK=threading.RLock();SESSIONS={};SLOW_STEP_MS=50
 
 def finite(value,low,high):
     value=float(value)
@@ -27,10 +33,21 @@ def dispatch(path,data):
             if client is not None and (not isinstance(client,str) or not re.fullmatch('[a-f0-9-]{36}',client)):raise ValueError('Invalid physics client.')
             owned=[key for key,item in SESSIONS.items() if client is not None and item.get('client')==client]
             if len(SESSIONS)-len(owned)>=4:raise ValueError('Close an unused model before opening another physics session.')
-            cage=load_cage(folder);sim=NewtonFace(cage,finite(data.get('softness',.6),0,1));session=uuid.uuid4().hex
-            # Compile and check the rest state before reporting ready.
-            check=sim.step(1/240)
+            # Break cold-start into three phases so a slow /physics/open trace names its culprit:
+            # 1) cage load  = JSON I/O          2) build = Warp graph construction (Python + finalize)
+            # 3) warmup     = Warp JIT compile on first .step()
+            with (sponsor_obs.stage('newton.open.cage','load_cage',capture=identifier) if sponsor_obs else _null()):
+                cage=load_cage(folder)
+            with (sponsor_obs.stage('newton.open.build','NewtonFace(cage)',softness=float(finite(data.get('softness',.6),0,1))) if sponsor_obs else _null()) as span:
+                sim=NewtonFace(cage,finite(data.get('softness',.6),0,1))
+                if span:
+                    span.set_data('newton.particles',sim.model.particle_count);span.set_data('newton.tetrahedra',sim.model.tet_count);span.set_data('newton.ready_ms',round(sim.ready_ms,1))
+            session=uuid.uuid4().hex
+            with (sponsor_obs.stage('newton.open.warmup','sim.step(1/240)') if sponsor_obs else _null()) as span:
+                check=sim.step(1/240)
+                if span:span.set_data('newton.warmup_ms',round(check['stepMs'],1))
             if check['peakMm']>.05 or check['minimumVolumeRatio']<.95:raise ValueError('Newton rest-state validation failed.')
+            if sponsor_obs:sponsor_obs.note(capture=identifier,particles=sim.model.particle_count,cold_start='true')
             for key in owned:del SESSIONS[key]
             SESSIONS[session]={'sim':sim,'cage':cage,'used':now,'folder':folder,'client':client}
             return {'session':session,**sim.info()}
@@ -52,7 +69,12 @@ def dispatch(path,data):
         impacts=data.get('impacts',[])
         if not isinstance(impacts,list) or len(impacts)>2:raise ValueError('Too many contacts.')
         for hit in impacts:sim.impact(hit['point'],hit['direction'],finite(hit['speed'],0,4))
-        return sim.step(finite(data.get('dt',1/30),1/1000,1/30))
+        result=sim.step(finite(data.get('dt',1/30),1/1000,1/30))
+        # 30Hz is too hot for per-frame spans; only the outliers are worth Sentry attention.
+        # A single slow step is the exact "found in the trace" moment the rubric asks for.
+        if sponsor_obs and result.get('stepMs',0)>SLOW_STEP_MS:
+            sponsor_obs.log('physics.step slow',step_ms=round(result['stepMs'],1),impacts=len(impacts),contacts=result.get('contacts'),peak_mm=round(result.get('peakMm',0),2))
+        return result
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass

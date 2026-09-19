@@ -87,7 +87,7 @@ try:
     positions=np.array(mesh['positions']).reshape(-1,3)*scale;joints*=scale
     mesh['positions']=positions.ravel().tolist()
     evidence={'registeredViews':registered,'inputViews':len(frames),'jointResidualRelativeToForearm':error,'medianSplatThinness':thinness,'surfaceMethod':mesh['stats']['method'],'scale':f'Forearm normalized to {target_length*100:g} cm; '+('user measurement.' if measured else 'unmeasured estimate.'),'limitation':'Experimental reconstruction. Inspect all views before accepting likeness. Auto skin weights are approximate.'}
-    bundle={'format':'contact-arm','version':1,'side':manifest['side'],'mesh':mesh,'joints':joints.tolist(),'evidence':evidence}
+    bundle={'format':'punching-face-arm','version':1,'side':manifest['side'],'mesh':mesh,'joints':joints.tolist(),'evidence':evidence}
     (folder/'arm-bundle.json').write_text(json.dumps(bundle))
     status('complete','Arm mesh reconstructed from the captured images. Inspect its shape and texture.',bundle=bundle)
 except Exception as exc:

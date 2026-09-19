@@ -14,7 +14,7 @@ const WASM=local?'/wasm':'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0
 const MODEL=local?'/models/hand_landmarker.task':'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 // Remembered per tab and per room so a reload (or a flaky connection) drops you straight back in, under the
 // same identity: LiveKit then replaces the stale connection instead of showing you twice.
-const KEY='contact-guest-'+(hash.get('r')||'');
+const KEY='punching-face-guest-'+(hash.get('r')||'');
 const saved=()=>{try{return JSON.parse(sessionStorage.getItem(KEY)||'null');}catch{return null;}};
 const remember=value=>{try{value?sessionStorage.setItem(KEY,JSON.stringify(value)):sessionStorage.removeItem(KEY);}catch{/* private mode */}};
 const identity=saved()?.identity||'guest-'+[...crypto.getRandomValues(new Uint8Array(4))].map(b=>b.toString(16).padStart(2,'0')).join('');

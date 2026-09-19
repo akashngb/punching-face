@@ -6,7 +6,7 @@ before you submit.** Anything marked *unverified* was not checked.
 
 ## One product, three sponsors, three different jobs
 
-> **CONTACT: scan your own head, then spar with it, coached by an AI cornerman that watches, listens and talks.**
+> **PUNCHING FACE: scan your own head, then spar with it, coached by an AI cornerman that watches, listens and talks.**
 
 | Track | Its job in the product | State today |
 |---|---|---|
@@ -83,7 +83,7 @@ you cannot coach.** "Was that hook better?" only makes sense to a model that saw
 
 **Architecture (edge → cloud):**
 - *Edge, already built:* MediaPipe hand/pose tracking at ~30 Hz in workers; punch events, speed, hit region and guard
-  state. Read them from `window.__contactLab.state` so `src/main.js` internals stay untouched.
+  state. Read them from `window.__punchingFace.state` so `src/main.js` internals stay untouched.
 - *Cloud, new:* per turn send the user's utterance (audio) + 2–4 downscaled keyframes from the last few seconds + a
   small JSON of recent punch telemetry → OMNI streams text + speech back.
 - *Relay, new:* the key must never reach the browser. Mirror the OpenAI pattern (env var, else

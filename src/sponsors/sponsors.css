@@ -1,4 +1,4 @@
-/* Sponsor dock. Uses the app's own variables (--line, --muted, --green, --accent) so it reads as part of CONTACT. */
+/* Sponsor dock. Uses the app's own variables (--line, --muted, --green, --accent) so it reads as part of PUNCHING FACE. */
 #sponsor-dock{position:fixed;right:14px;bottom:14px;z-index:40;width:330px;max-width:calc(100vw - 28px);font-size:12px;color:#222923}
 #sponsor-dock .sd-pill{display:flex;align-items:center;gap:8px;margin-left:auto;background:#fbfcf8;box-shadow:0 5px 25px #0002;font-family:'Space Grotesk',sans-serif;font-weight:600}
 #sponsor-dock .sd-dot{width:8px;height:8px;border-radius:50%;background:#b9c2b3;flex:none}

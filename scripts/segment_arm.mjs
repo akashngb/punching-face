@@ -28,8 +28,8 @@ async function cached(name){
 const model=JSON.parse(await cached('model-stride16.json')),weightSpecs=[],chunks=[],hashes={};
 for(const group of model.weightsManifest){weightSpecs.push(...group.weights);for(const name of group.paths){const bytes=await cached(name);chunks.push(bytes);hashes[name]=crypto.createHash('sha256').update(bytes).digest('hex');}}
 const weights=Buffer.concat(chunks),weightData=weights.buffer.slice(weights.byteOffset,weights.byteOffset+weights.byteLength);
-tf.io.registerLoadRouter(url=>url==='contact-bodypix-local'?tf.io.fromMemory({modelTopology:model.modelTopology,weightSpecs,weightData}):null);
-const segmenter=await createSegmenter(SupportedModels.BodyPix,{architecture:'MobileNetV1',outputStride:16,multiplier:1,quantBytes:4,modelUrl:'contact-bodypix-local'});
+tf.io.registerLoadRouter(url=>url==='punching-face-bodypix-local'?tf.io.fromMemory({modelTopology:model.modelTopology,weightSpecs,weightData}):null);
+const segmenter=await createSegmenter(SupportedModels.BodyPix,{architecture:'MobileNetV1',outputStride:16,multiplier:1,quantBytes:4,modelUrl:'punching-face-bodypix-local'});
 const indices=pilot?[0,Math.floor(capture.frames.length/2),capture.frames.length-1]:capture.frames.map((_,i)=>i),metrics=[];
 for(const index of indices){
   const frame=capture.frames[index],name=frame.filename;if(path.basename(name)!==name)throw new Error('Invalid frame filename.');

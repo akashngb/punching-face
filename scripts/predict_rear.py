@@ -22,8 +22,8 @@ def predict(folder):
     if output.exists() and meta.exists() and json.loads(meta.read_text()).get('captureHash')==signature:return json.loads(meta.read_text())
     key,_=config()
     if not key:raise ValueError('OpenAI is required to predict the rear appearance.')
-    cli=Path(os.environ.get('CONTACT_IMAGE_CLI',str(Path.home()/'.codex/skills/.system/imagegen/scripts/image_gen.py')))
-    if not cli.is_file():raise ValueError('Install the Image Generation skill or set CONTACT_IMAGE_CLI to its image_gen.py CLI.')
+    cli=Path(os.environ.get('PUNCHING_FACE_IMAGE_CLI',str(Path.home()/'.codex/skills/.system/imagegen/scripts/image_gen.py')))
+    if not cli.is_file():raise ValueError('Install the Image Generation skill or set PUNCHING_FACE_IMAGE_CLI to its image_gen.py CLI.')
     frames=[f for f in json.loads((folder/'capture.json').read_text())['frames'] if f.get('landmarks')];images=[]
     for label,angle in [('front',0),('left',-45),('right',45)]:
         frame=min(frames,key=lambda f:abs(f['yaw']-angle));im=Image.open(folder/'images'/frame['filename']).convert('RGBA');im=im.crop(im.getbbox());path=dest/(label+'.png');im.save(path);images.extend(['--image',str(path)])

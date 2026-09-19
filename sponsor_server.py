@@ -8,8 +8,20 @@ Standard library only, so it runs in the existing Python 3.9 venv.
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
-import base64,hashlib,hmac,json,os,re,socket,time,urllib.error,urllib.request,uuid
+import base64,hashlib,hmac,json,os,re,socket,sys,time,urllib.error,urllib.request,uuid
 import sponsor_obs
+
+# yibuapi call ledger (Huawei OMNI Live challenge requires per-call recording).
+# Import the sponsor's canonical writer from `.local/third_party/` without copying
+# it into the repo. Fails soft if the package isn't extracted yet.
+_ROOT=Path(__file__).resolve().parent
+_LEDGER=_ROOT/'.local/usage/yibu_api_calls.jsonl'
+_LEDGER.parent.mkdir(parents=True,exist_ok=True)
+os.environ.setdefault('YIBU_AUDIT_LOG',str(_LEDGER))
+_YIBU_PKG=_ROOT/'.local/third_party/yibuapi-examples/yibuapi_examples_20260918_v01'
+if _YIBU_PKG.is_dir() and str(_YIBU_PKG) not in sys.path: sys.path.insert(0,str(_YIBU_PKG))
+try:from yibu_audit import append_audit_record as _yibu_audit
+except Exception:_yibu_audit=None
 
 ROOT=Path(__file__).resolve().parent;SECRETS=ROOT/'.local/secrets';PORT=5176
 ORIGINS=('http://127.0.0.1:5173','http://localhost:5173')
@@ -139,7 +151,7 @@ def omni_request(cfg,data):
     elif text:messages.append({'role':'user','content':text})
     else:messages.append({'role':'user','content':'Give me one coaching cue from what you just saw.'})
     body={'model':cfg['model'] or 'qwen3.5-omni-flash','messages':messages,'stream':True,'stream_options':{'include_usage':True},'max_tokens':140,'temperature':.7}
-    if data.get('voice',True):body.update(modalities=['text','audio'],audio={'voice':cfg['voice'] or 'Cherry','format':'wav'})
+    if data.get('voice',True):body.update(modalities=['text','audio'],audio={'voice':cfg['voice'] or 'Ethan','format':'wav'})
     return body,len(frames)
 
 def mock_reply(data):
@@ -149,7 +161,7 @@ def mock_reply(data):
     return '{name}, {count} punches, top speed {mx:.1f} metres per second. You favour the {side}; mix in the other hand and bring your guard back after the {zone}.'.format(name=clean_name(top.get('name'),'Fighter'),count=int(top.get('count',0)),mx=float(top.get('max',0)),side=side,zone=str(last.get('zone','cheek'))[:20])
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='ContactSponsors/1';protocol_version='HTTP/1.1'
+    server_version='PunchingFaceSponsors/1';protocol_version='HTTP/1.1'
     def log_message(self,*args):pass
     def cors(self):
         origin=self.headers.get('Origin')
@@ -169,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path!='/sponsors/config':return self.reply(404,{'error':'Unknown sponsor endpoint.'})
             omni=secret('omni');lk=livekit();sentry=secret('sentry')
             # The Sentry DSN is public by design; no other secret ever leaves this process.
-            self.reply(200,{'omni':{'configured':bool(omni['apiKey']),'model':omni['model'] or 'qwen3.5-omni-flash','voice':omni['voice'] or 'Cherry','gateway':(omni['baseUrl'] or 'https://yibuapi.com/v1').split('/')[2]},
+            self.reply(200,{'omni':{'configured':bool(omni['apiKey']),'model':omni['model'] or 'qwen3.5-omni-flash','voice':omni['voice'] or 'Ethan','gateway':(omni['baseUrl'] or 'https://yibuapi.com/v1').split('/')[2]},
                 'livekit':{'configured':bool(lk),'mode':lk['mode'] if lk else None,'url':lk['url'] if lk else None,'guestUrl':(lk or {}).get('guestUrl'),'reusableInvites':bool((lk or {}).get('tokenServerId'))},
                 'sentry':{'dsn':sentry['browserDsn'] or sentry['pythonDsn'],'environment':sentry['environment'] or 'hackathon','python':sponsor_obs.ENABLED}})
         except PermissionError as e:self.reply(403,{'error':str(e)})
@@ -201,10 +213,15 @@ class Handler(BaseHTTPRequestHandler):
                 for word in mock_reply(data).split(' '):self.event('text',{'delta':word+' '});time.sleep(.03)
                 return self.event('done',{'mock':True,'ms':round((time.perf_counter()-started)*1000)})
             body,frames=omni_request(cfg,data);model=body['model']
-            with sponsor_obs.ai_span(model,'yibuapi') as span:
+            # Non-PII shape data for Sentry AI monitoring. Never prompt content or images.
+            shape=dict(messages_count=len(body['messages']),system_prompt_len=len(COACH),frames_attached=frames,has_voice=('audio' in body),temperature=body.get('temperature'),max_tokens=body.get('max_tokens'),audio_ms=0)
+            audio=data.get('audioWav');shape['audio_ms']=int(len(audio)*3/4/48) if isinstance(audio,str) else 0  # rough wav bytes->ms
+            active_span=None
+            with sponsor_obs.ai_span(model,'yibuapi',**shape) as span:
+                active_span=span
                 request=urllib.request.Request((cfg['baseUrl'] or 'https://yibuapi.com/v1').rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+cfg['apiKey'],'Accept':'text/event-stream'})
                 self.event('meta',{'mock':False,'model':model,'frames':frames,'voice':'audio' in body})
-                first=None;usage=None
+                first=None;usage=None;finish=None
                 with urllib.request.urlopen(request,timeout=60) as upstream:
                     for raw in upstream:
                         line=raw.decode('utf-8','replace').strip()
@@ -215,15 +232,29 @@ class Handler(BaseHTTPRequestHandler):
                         except ValueError:continue
                         usage=piece.get('usage') or usage
                         for choice in piece.get('choices') or []:
+                            finish=choice.get('finish_reason') or finish
                             delta=choice.get('delta') or {};audio=delta.get('audio') or {}
                             words=delta.get('content') if isinstance(delta.get('content'),str) else audio.get('transcript')
                             if words or audio.get('data'):first=first or time.perf_counter()
                             if words:self.event('text',{'delta':words})
                             if audio.get('data'):self.event('audio',{'pcm16':audio['data'],'rate':24000})
-                latency=round(((first or time.perf_counter())-started)*1000);sponsor_obs.ai_usage(span,usage,latency,frames)
-                self.event('done',{'mock':False,'firstTokenMs':latency,'ms':round((time.perf_counter()-started)*1000),'usage':usage})
+                latency=round(((first or time.perf_counter())-started)*1000)
+                sponsor_obs.ai_usage(span,usage,latency,frames,finish_reason=finish,model=model)
+                sponsor_obs.log('coach.turn',model=model,frames=frames,first_token_ms=latency,finish_reason=finish or 'unknown',tokens=(usage or {}).get('total_tokens'))
+                # Yibuapi challenge audit ledger (required per §6 of the reporting guide).
+                if _yibu_audit is not None:
+                    try:_yibu_audit(model=model,api_key=cfg.get('apiKey') or '',endpoint=(cfg['baseUrl'] or 'https://yibuapi.com/v1').rstrip('/')+'/chat/completions',purpose=str(data.get('purpose') or 'punching-face.coach'),transport='http',ok=True,status_code=200,latency_s=time.perf_counter()-started,response_json={'usage':usage or {}})
+                    except Exception:pass
+                self.event('done',{'mock':False,'firstTokenMs':latency,'ms':round((time.perf_counter()-started)*1000),'usage':usage,'finishReason':finish})
         except urllib.error.HTTPError as e:
             detail=e.read(600).decode('utf-8','replace');sponsor_obs.capture(e,{'status':e.code,'detail':detail})
+            # Also mark the AI span so AI-monitoring filters (error rate, top failing models) see it.
+            try:sponsor_obs.ai_error(active_span if 'active_span' in dir() else None,e.code,detail[:40])
+            except Exception:pass
+            # Failed calls are still recorded (guide §6). Never quote the key back into `detail`.
+            if _yibu_audit is not None:
+                try:_yibu_audit(model=cfg.get('model') or 'qwen3.5-omni-flash',api_key=cfg.get('apiKey') or '',endpoint=(cfg['baseUrl'] or 'https://yibuapi.com/v1').rstrip('/')+'/chat/completions',purpose=str(data.get('purpose') or 'punching-face.coach'),transport='http',ok=False,status_code=e.code,latency_s=time.perf_counter()-started,error=('HTTP %d: %s'%(e.code,detail[:200])))
+                except Exception:pass
             self.event('error',{'status':e.code,'message':'OMNI gateway refused the request (%d).'%e.code,'detail':detail})
         except (BrokenPipeError,ConnectionResetError):pass
         except Exception as e:

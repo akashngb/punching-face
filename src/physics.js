@@ -51,8 +51,8 @@ export class FaceDynamics {
     }
     this.lastImpact=null;this.regionPeaks={cheeks:0,nose:0,lips:0,forehead:0,jaw:0};
   }
-  impulse(point,direction,speed){
-    this.impactRig.trigger(this.rest,point,direction,speed,this.softness);
+  impulse(point,direction,speed,mode='hook'){
+    this.impactRig.trigger(this.rest,point,direction,speed,this.softness,mode);
     let affected=0;
     const radius=.025+this.softness*.021;
     this.lastImpact={point:point.clone(),direction:direction.clone()};
@@ -76,6 +76,10 @@ export class FaceDynamics {
     }
     this.recoilVelocity.y+=direction.x*clamp(speed,.4,3)*2;
     this.recoilVelocity.x-=direction.z*clamp(speed,.4,3)*.6;
+    // Upward-directed impact (uppercut) tilts the head back. Same sign as the
+    // forward-Z contribution above; a hook already includes some of this via its
+    // slightly-downward direction, so the coefficient stays modest for hooks.
+    this.recoilVelocity.x+=direction.y*clamp(speed,.4,3)*1.1;
     this.recoilVelocity.z-=direction.x*clamp(speed,.4,3)*.7;
     return affected;
   }

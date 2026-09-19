@@ -4,7 +4,7 @@ const request=async(path,data)=>{const r=await fetch('/physics/'+path,{method:'P
 // A page reload can interrupt its close request. A tab-scoped lease lets the
 // server replace that abandoned simulation without evicting other open tabs.
 function physicsClient(){
-  try{let id=sessionStorage.getItem('contact-newton-client');if(!id){id=crypto.randomUUID();sessionStorage.setItem('contact-newton-client',id);}return id;}catch{return undefined;}
+  try{let id=sessionStorage.getItem('punching-face-newton-client');if(!id){id=crypto.randomUUID();sessionStorage.setItem('punching-face-newton-client',id);}return id;}catch{return undefined;}
 }
 
 // Newton supplies local tissue contact. The browser layers expressive impact
@@ -32,7 +32,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
     const angle=this.rig.jaw*.42*jaw,hingeY=lower[1]+.065,hingeZ=lower[2]-.09,dy=y-hingeY,dz=z-hingeZ;
     return [(mouthR-mouthL)*this.rig.smile*.006,dy*(Math.cos(angle)-1)-dz*Math.sin(angle)+(mouthL+mouthR)*this.rig.smile*.006+brow*this.rig.brow*.006-lid*this.rig.squint*.0015,dy*Math.sin(angle)+dz*(Math.cos(angle)-1)-lid*this.rig.squint*.001];
   }
-  impulse(point,direction,speed){if(!this.ready||this.pending.length>=2)return 0;this.pending.push({point:point.toArray(),direction:direction.toArray(),speed:clamp(speed,0,4)});this.impactRig.trigger(this.rest,point,direction,speed,this.softness);this.lastImpact={point:point.clone(),direction:direction.clone()};this.recoilVelocity.y+=direction.x*speed*.4;return this.binding.active.reduce((a,b)=>a+(b>0),0);}
+  impulse(point,direction,speed,mode='hook'){if(!this.ready||this.pending.length>=2)return 0;this.pending.push({point:point.toArray(),direction:direction.toArray(),speed:clamp(speed,0,4),mode});this.impactRig.trigger(this.rest,point,direction,speed,this.softness,mode);this.lastImpact={point:point.clone(),direction:direction.clone()};this.recoilVelocity.y+=direction.x*speed*.4;this.recoilVelocity.x+=direction.y*speed*.5;return this.binding.active.reduce((a,b)=>a+(b>0),0);}
   pose(){const p=new Float32Array(1404);for(let i=0;i<1404;i+=3){const d=this.rigDelta(...this.rest.slice(i,i+3));for(let j=0;j<3;j++)p[i+j]=this.rest[i+j]+d[j];}return Array.from(p);}
   async advance(dt){
     this.inflight=true;const reset=this.needsReset;this.needsReset=false;
