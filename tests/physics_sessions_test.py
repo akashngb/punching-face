@@ -10,9 +10,14 @@ from head_artifacts import HeadArtifactTransaction, published_folder
 from tests.head_artifacts_test import bundle
 
 
+class FakeModel:
+    # physics_server.dispatch() reads sim.model.particle_count for the sponsor_obs breadcrumb.
+    particle_count = 0
+
+
 class FakeSimulation:
     def __init__(self, *args):
-        pass
+        self.model = FakeModel()
 
     def step(self, *args):
         return {'peakMm': 0, 'minimumVolumeRatio': 1}

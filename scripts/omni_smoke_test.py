@@ -104,9 +104,9 @@ def resolve_config() -> dict:
         'realtime_url': pick('OMNI_REALTIME_URL', 'realtimeUrl'),
         'model': pick('OMNI_MODEL', 'model', 'qwen3.5-omni-flash'),
         'realtime_model': pick(
-            'OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-flash-realtime'
+            'OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-plus-realtime'
         ),
-        'voice': pick('OMNI_VOICE', 'voice', 'Cherry'),
+        'voice': pick('OMNI_VOICE', 'voice', 'Ethan'),
         'cloned_voice': pick('OMNI_CLONED_VOICE_ID', 'clonedVoiceId'),
     }
 

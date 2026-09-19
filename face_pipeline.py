@@ -12,6 +12,29 @@ except ImportError:
     trace_env = lambda: None
 ROOT = Path(__file__).resolve().parent
 
+# The worker spawns further subprocesses, so cancelling it has to reach the whole tree.
+# POSIX gets a session of its own and signals the group; Windows has no process groups to
+# signal, so CTRL_BREAK reaches the worker's own group and taskkill ends the tree outright.
+if os.name == 'nt':
+    DETACHED = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+
+    def stop_worker(pid, force):
+        if force:
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True
+            )
+        else:
+            try:
+                os.kill(pid, signal.CTRL_BREAK_EVENT)
+            except OSError:
+                raise ProcessLookupError(pid) from None
+
+else:
+    DETACHED = {'start_new_session': True}
+
+    def stop_worker(pid, force):
+        os.killpg(pid, signal.SIGKILL if force else signal.SIGTERM)
+
 
 def atomic(path, data):
     tmp = path.with_suffix('.tmp')
@@ -526,7 +549,7 @@ class FaceStore:
                         + flags,
                         stdout=log,
                         stderr=subprocess.STDOUT,
-                        start_new_session=True,
+                        **DETACHED,
                         env=trace_env(),
                     )
                 finally:
@@ -555,7 +578,7 @@ class FaceStore:
             try:
                 p.wait(timeout=1800)
             except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
+                stop_worker(p.pid, True)
                 p.wait()
             with self.lock:
                 folder = self.root / identifier
@@ -584,13 +607,13 @@ class FaceStore:
             self.deleting.add(identifier)
             if job:
                 try:
-                    os.killpg(job[0].pid, signal.SIGTERM)
+                    stop_worker(job[0].pid, False)
                 except ProcessLookupError:
                     pass
         if job:
             if not job[1].wait(5):
                 try:
-                    os.killpg(job[0].pid, signal.SIGKILL)
+                    stop_worker(job[0].pid, True)
                 except ProcessLookupError:
                     pass
                 if not job[1].wait(5):
@@ -612,13 +635,13 @@ class FaceStore:
             jobs = list(self.jobs.values())
         for process, done in jobs:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                stop_worker(process.pid, False)
             except ProcessLookupError:
                 pass
         for process, done in jobs:
             if not done.wait(3):
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    stop_worker(process.pid, True)
                 except ProcessLookupError:
                     pass
                 done.wait(3)

@@ -98,6 +98,15 @@
   padding: 8px 9px;
   background: #fff;
 }
+#sponsor-dock select {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
 #sponsor-dock button.primary {
   background: var(--green);
   border-color: var(--green);

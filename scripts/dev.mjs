@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
+import { capturePython, newtonPython } from './venv.mjs';
 const children = [
-  spawn('.local/newton-env/bin/python', ['physics_server.py'], { stdio: 'inherit' }),
-  spawn('.venv/bin/python', ['server.py'], { stdio: 'inherit' }),
-  spawn('.venv/bin/python', ['omni_relay.py'], { stdio: 'inherit' }),
+  spawn(newtonPython, ['physics_server.py'], { stdio: 'inherit' }),
+  spawn(capturePython, ['server.py'], { stdio: 'inherit' }),
+  spawn(capturePython, ['omni_relay.py'], { stdio: 'inherit' }),
   spawn('node', ['node_modules/vite/bin/vite.js'], { stdio: 'inherit' }),
 ];
 let stopping = false;

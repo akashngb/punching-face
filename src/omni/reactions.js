@@ -14,13 +14,20 @@
 // A single AudioContext is shared. play() returns quickly; decoding runs
 // once per key and is cached.
 
+// The face is the one taking the punch, so these are all reactions to being hit
+// — a ladder of force, plus a few things it does between exchanges.
 const SYNTH = {
-  // arena
   'arena.grunt.low': { tone: 190, ms: 120, fadeMs: 40, shape: 'grunt' },
   'arena.grunt.mid': { tone: 220, ms: 180, fadeMs: 50, shape: 'grunt' },
   'arena.grunt.high': { tone: 260, ms: 260, fadeMs: 60, shape: 'exhale' },
   'arena.tap': { tone: 340, ms: 90, fadeMs: 30, shape: 'grunt' },
+  'arena.scoff': { tone: 300, ms: 110, fadeMs: 35, shape: 'exhale' },
+  'arena.laugh': { tone: 210, ms: 150, fadeMs: 45, shape: 'moan' },
+  'arena.wheeze': { tone: 170, ms: 380, fadeMs: 90, shape: 'exhale' },
 };
+
+/** Every key the arena scenario can fire; warm these up at scene load. */
+export const ARENA_KEYS = Object.keys(SYNTH);
 
 const cache = new Map();
 let ctx = null;
@@ -118,6 +125,10 @@ export function keyForEvent(event) {
     const bucket = event.force > 60 ? 'high' : event.force > 30 ? 'mid' : 'low';
     return `arena.grunt.${bucket}`;
   }
+  // A press is contact without a punch behind it — the face registers it and
+  // nothing more. A big hit ends with the face getting its breath back.
+  if (event.type === 'press') return 'arena.tap';
+  if (event.type === 'release' && event.rebound) return 'arena.wheeze';
   return null;
 }
 

@@ -6,12 +6,14 @@ import { readFileSync } from 'node:fs';
 // by more than one person and more than one coding agent, so their presence is asserted here.
 // If this fails, a hook was dropped during an edit: restore it, do not delete this test.
 // What they are for: SPONSOR_SETUP.md.
-test('index.html still loads the sponsor dock after main.js', () => {
+test('index.html still loads the sponsor dock after the React app entry', () => {
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(
     html,
-    /src="\/src\/main\.js"\s*>\s*<\/script>\s*<script\s+type="module"\s+src="\/src\/sponsors\/boot\.js"\s*>/,
+    /src="\/src\/app\/main\.tsx"\s*>\s*<\/script>\s*<script\s+type="module"\s+src="\/src\/sponsors\/boot\.js"\s*>/,
   );
+  const shell = readFileSync(new URL('../src/app/main.tsx', import.meta.url), 'utf8');
+  assert.match(shell, /await import\('@\/main\.js'\)/);
 });
 
 test('main.js still exposes remotePunch, the only way a LiveKit guest can land a hit', () => {

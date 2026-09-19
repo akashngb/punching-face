@@ -60,6 +60,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
       throw new Error('Invalid face cage weights.');
     this.anchors = cage.rigAnchors;
     this.impactRig.setAnchors(this.anchors);
+    this.speechRig.setAnchors(this.anchors);
   }
 
   async connect(id, generation = 'legacy') {
@@ -232,6 +233,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
 
   step(dt) {
     this.impactRig.step(dt);
+    this.speechRig.step(dt, this.speechDuck);
     const rigKey = JSON.stringify(this.rig) + ':' + this.softness;
     if (rigKey !== this.lastPose) {
       this.lastPose = rigKey;
@@ -260,7 +262,11 @@ export class NewtonFaceDynamics extends FaceDynamics {
       for (let j = 0; j < 3; j++) {
         this.offset[i + j] += (this.targetOffset[i + j] - this.offset[i + j]) * blend;
         p[i + j] =
-          this.rest[i + j] + r[j] + this.offset[i + j] + this.impactRig.offset[i + j];
+          this.rest[i + j] +
+          r[j] +
+          this.offset[i + j] +
+          this.impactRig.offset[i + j] +
+          this.speechRig.offset[i + j];
       }
       const d = Math.hypot(
         this.offset[i] + this.impactRig.offset[i],

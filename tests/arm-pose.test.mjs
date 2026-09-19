@@ -205,13 +205,19 @@ test('stale webcam samples and reacquisition cannot produce a phantom punch', as
   await tracking.tick(1005, hands);
   assert.equal(hands[0].tracked, true);
   assert.equal(hands[0].updated, false);
+  // Brief gaps retain the drawing but must revoke contact eligibility.
   await tracking.tick(1400, hands);
   assert.equal(hands[0].tracked, false);
   assert.equal(hands[0].armPose, null);
   assert.equal(hands[0].visible, true);
-  tracking.results.timestamp = 1450;
-  tracking.results.pose.timestamp = 1450;
-  await tracking.tick(1460, hands);
+  // The silence window in hands.js is 1 s, so the drop has to be probed past it.
+  await tracking.tick(2100, hands);
+  assert.equal(hands[0].tracked, false);
+  assert.equal(hands[0].armPose, null);
+  assert.equal(hands[0].visible, false);
+  tracking.results.timestamp = 2150;
+  tracking.results.pose.timestamp = 2150;
+  await tracking.tick(2160, hands);
   assert.equal(hands[0].tracked, true);
   assert.equal(hands[0].updated, false);
   near(hands[0].previous, hands[0].center);

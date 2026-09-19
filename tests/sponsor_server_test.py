@@ -1,7 +1,7 @@
 """Sponsor services: tokens verify, secrets stay private, the coach stream is well formed,
 and nothing answers a non-local or cross-origin caller. No network and no real keys."""
 
-import base64, hashlib, hmac, json, os, stat, sys, tempfile, threading, unittest
+import base64, hashlib, hmac, json, os, sys, tempfile, threading, unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sponsor_server as service
+import private_files
 
 
 def decode(part):
@@ -205,8 +206,10 @@ class SponsorServer(unittest.TestCase):
         )
         self.assertEqual(saved, {'saved': ['apiKey', 'model']})
         path = service.SECRETS / 'omni.json'
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(service.SECRETS.stat().st_mode), 0o700)
+        self.assertEqual(private_files.holders(path), private_files.owner_only())
+        self.assertEqual(
+            private_files.holders(service.SECRETS), private_files.owner_only(directory=True)
+        )
         config = (
             urlopen(
                 Request(

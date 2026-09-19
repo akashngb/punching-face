@@ -14,8 +14,15 @@ regress between "OMNI off" and "OMNI on". Snapshots recorded here.
 | First model response (ms) | `omni/latency` overlay (`Ctrl-L`) | Toggles the overlay; median across 5 turns. |
 | Contact → cached audio (ms) | `omni/latency` overlay | 50 ms budget (OMNI.md §3.2). |
 
-Run `scripts/perf_snapshot.mjs` (Node 18+, DevTools protocol) against the running dev app to log a
-JSON row. Pass `--label baseline` or `--label omni-on`. Row is appended below.
+Run `node scripts/perf_snapshot.mjs --label baseline` (Node 22+, no dependencies) against the running
+dev app. It drives Chrome over the DevTools Protocol, calls `Page.bringToFront` first — a background
+tab throttles `requestAnimationFrame`, and a throttled sample reads as ~0 fps rather than as an
+error — then samples rAF idle and again while dispatching a hook every 700 ms, and inserts a row
+below. Use `--url "http://127.0.0.1:5173/?arena_omni=1" --label omni-on` for the OMNI side.
+
+Recon/rig seconds and contact→deform need an actual capture and a connected webcam, so they stay
+blank on runs that only exercise the reference head. FPS run-to-run spread on the same build is a
+few fps, so treat a single pair of rows as indicative and repeat before calling a regression.
 
 ## Baseline (OMNI off)
 
@@ -26,6 +33,9 @@ Recorded before the OMNI integration lands. Any row here is authoritative for "e
 | Date | Machine | Recon (s) | Rig (s) | Idle FPS | Under-punch FPS | Contact→deform (ms) |
 |---|---|---|---|---|---|---|
 | _pending_ | Apple M5 Pro, macOS 26.5 | | | | | |
+| 2026-09-19 | Windows 11, Python 3.12 dev box | — | — | 142.1 | 139.9 | — |
+| 2026-09-19 | baseline-recheck | — | — | 144.2 | 139.9 | — |
+<!-- ROWS:baseline -->
 
 ## With OMNI on (Plan A/B/C)
 
@@ -33,7 +43,8 @@ Recorded after each engine milestone. Regression = block on it before shipping.
 
 | Date | Plan | Recon (s) | Rig (s) | Idle FPS | Under-punch FPS | Contact→deform (ms) | First response (ms) | Cache audio (ms) |
 |---|---|---|---|---|---|---|---|---|
-| _pending_ | | | | | | | | |
+| 2026-09-19 | mock (no key) | — | — | 137.9 | 139.7 | — | — | — |
+<!-- ROWS:omni -->
 
 ## Notes
 

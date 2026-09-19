@@ -17,6 +17,8 @@ import { HeadGlasses } from './head-accessories.js';
 import { HeadHair, remapHairRoots } from './head-hair.js';
 import { SurfaceAppearance, weldTexturedSurface } from './surface-appearance.js';
 import { refineSurface } from './surface.js';
+import { openMouthAperture, MouthCavity } from './mouth-aperture.js';
+import { detectFaceOnMesh, lastDetectorRender } from './lip-detect.js';
 import { VirtualHand, Tracking, makePhotoFace, cropFacePortrait } from './hands.js';
 import { SlapDetector, DEFAULT_TUNING } from './slap-detect.js';
 import './style.css';
@@ -572,7 +574,8 @@ let impacts = 0,
 const demoQueue = [];
 let surfaceAppearance = null,
   headGlasses = null,
-  headHair = null;
+  headHair = null,
+  mouthCavity = null;
 let meshMatchesSource = true,
   impactHeld = false,
   watchPeak = false,
@@ -748,6 +751,11 @@ function installMesh(g, material, meta = {}) {
   realismControls?.reset();
   installGlasses(null);
   installHair(null);
+  mouthCavity?.dispose();
+  mouthCavity = null;
+  // Cut the mouth open BEFORE refineSurface: the canonical face seals it with 18
+  // exactly-known triangles and subdividing turns those into 288 anonymous ones.
+  const aperture = openMouthAperture(g, null);
   dynamics?.dispose?.();
   meshControls(true);
   capturedFaceId = null;
@@ -755,6 +763,12 @@ function installMesh(g, material, meta = {}) {
     const refined = refineSurface(g, 2);
     g.dispose();
     g = refined;
+  }
+  // refineSurface builds a fresh geometry, so carry the aperture over. Its ring
+  // indices still hold: subdivision only ever appends vertices.
+  if (aperture) {
+    g.userData = g.userData || {};
+    g.userData.mouthAperture = aperture;
   }
   surfaceAppearance?.dispose();
   surfaceAppearance = null;
@@ -869,6 +883,7 @@ function installMesh(g, material, meta = {}) {
     $(name).value = 0;
     if ($(name + '-value')) $(name + '-value').textContent = '0%';
   }
+  fitMouth();
   setView('mesh');
   revision++;
   peak = 0;
@@ -1384,6 +1399,7 @@ function frame(time) {
   }
   updateSlapHud(time);
   if (dynamics) {
+    dynamics.speechRig.set(window.__faceSpeech?.read(dt));
     if (!impactHeld) {
       dynamics.step(dt * ($('slow-motion').checked ? 0.38 : 1));
       if (
@@ -1767,7 +1783,11 @@ $('face-file').onchange = async (e) => {
           m.material.clone(),
           m.userData.reconstruction ?? { source: 'Imported mesh' },
         );
-      if (uploadedAnchors) dynamics.impactRig.setAnchors(uploadedAnchors);
+      if (uploadedAnchors) {
+        dynamics.impactRig.setAnchors(uploadedAnchors);
+        dynamics.speechRig.setAnchors(uploadedAnchors);
+      }
+      fitMouth();
       installGlasses(m.userData.accessories?.glasses);
       installHair(
         remapHairRoots(
@@ -2103,6 +2123,12 @@ async function photoFace(image) {
       source: 'Single image landmark proxy',
       limitation: 'Estimated depth. Single-view estimate. Unseen surfaces unavailable.',
     });
+    const landmarkAnchors = anchorsFromLandmarks(dynamics?.rest);
+    /* Speech only: the impact rig is tuned against the default table on this path, so re-anchoring it would silently change how every punch looks. */ if (
+      landmarkAnchors
+    )
+      dynamics.speechRig.setAnchors(landmarkAnchors);
+    fitMouth(!!landmarkAnchors);
     $('model-kind').textContent = 'Photo proxy · estimated depth';
     $('capture-dialog').close();
     toast(
@@ -2191,6 +2217,7 @@ async function loadPhotoFace(id) {
     installHair(data.accessories?.hair);
     dynamics = new NewtonFaceDynamics(mesh.geometry, binding, cage, physicsStatus);
     dynamics.softness = Number($('softness').value);
+    fitMouth(!!cage.rigAnchors);
     for (let i = 0; i < rigMarkers.children.length; i++) {
       const index = [70, 300, 159, 386, 61, 291, 152][i];
       rigMarkers.children[i].position.fromArray(cage.rigAnchors[index]);
@@ -2381,6 +2408,18 @@ window.__punchingFace = {
       scannedArms: [...scannedArms.keys()],
       mode,
       room: !!roomSplat || !!roomTexture,
+      mouth: mesh?.geometry.userData?.mouthAperture
+        ? {
+            strategy: mesh.geometry.userData.mouthAperture.strategy,
+            removed: mesh.geometry.userData.mouthAperture.removed,
+            width: mesh.geometry.userData.mouthAperture.width,
+            height: mesh.geometry.userData.mouthAperture.height,
+            centre: mesh.geometry.userData.mouthAperture.centre,
+            cavity: !!mouthCavity,
+            ring: mesh.geometry.userData.mouthAperture.ring,
+            anchors: dynamics?.speechRig?.anchors,
+          }
+        : null,
     };
   },
   get appearance() {
@@ -2636,6 +2675,75 @@ function sliceBust(g) {
 // and made the head look chewed off. Instead: detect where the actual features (nose, chin, eyes,
 // cheeks, mouth) live on this specific mesh and hand those positions to the impact rig. Then the
 // rig anchors follow the mesh instead of the mesh being forced to fit the anchors.
+// The first 468 vertices of a landmark proxy mesh ARE the MediaPipe landmarks, and
+// refineSurface only ever appends midpoints, so they keep their indices through
+// subdivision. Reading anchors straight off the mesh beats the reference-frame
+// defaults, which sit ~9 mm off the real mouth on this path — enough to animate a
+// chin instead of a pair of lips.
+const ANCHOR_LANDMARKS = [1, 13, 14, 50, 61, 152, 159, 280, 291, 386];
+function anchorsFromLandmarks(rest) {
+  if (!rest || rest.length < 468 * 3) return null;
+  const out = {};
+  for (const i of ANCHOR_LANDMARKS) {
+    const v = [rest[i * 3], rest[i * 3 + 1], rest[i * 3 + 2]];
+    if (!v.every(Number.isFinite)) return null;
+    out[i] = v;
+  }
+  return out;
+}
+// Open the lips and put a dark void behind them. Idempotent: a geometry that was
+// already cut keeps its aperture, so this only ever rebuilds the cavity. Heads
+// whose mouth cannot be located keep a sealed face and simply do not open.
+// `?lipdebug=1` keeps the annotated render the landmarker was shown, so a head
+// that comes out wrong can be looked at instead of guessed about.
+const lipDebug = (() => {
+  try {
+    return new URL(location.href).searchParams.get('lipdebug') === '1';
+  } catch {
+    return false;
+  }
+})();
+async function fitMouth(trustAnchors = false) {
+  try {
+    mouthCavity?.dispose();
+    mouthCavity = null;
+    if (!mesh) return null;
+    // Look at the head before cutting it. A landmarker run on a render of this
+    // exact mesh beats every inferred anchor, and it is the only thing that
+    // works on an arbitrary uploaded GLB.
+    const detection = await detectFaceOnMesh({
+      renderer,
+      scene,
+      mesh,
+      headPivot,
+      debug: lipDebug,
+    });
+    // Browser-QA handle: what the detector was shown and what it made of it.
+    window.__faceDetection = {
+      ok: !!detection,
+      framing: detection?.framing,
+      mouthWidthNdc: detection?.mouthWidthNdc,
+      anchors: detection?.anchors,
+      annotated: detection?.debugImage,
+      render: lastDetectorRender(),
+    };
+    if (detection?.anchors && dynamics?.speechRig)
+      dynamics.speechRig.setAnchors(detection.anchors);
+    const aperture = openMouthAperture(
+      mesh.geometry,
+      detection?.anchors ?? dynamics?.speechRig?.anchors,
+      { trustAnchors: trustAnchors || !!detection, detection },
+    );
+    if (!aperture) return null;
+    mouthCavity = new MouthCavity(aperture);
+    headPivot.add(mouthCavity);
+    return aperture;
+  } catch (error) {
+    window.__faceDetection = { ok: false, error: String(error).slice(0, 300) };
+    console.warn('Mouth fitting failed:', error);
+    return null;
+  }
+}
 const REFERENCE_HEAD_HEIGHT = 0.28;
 
 function normalizeHead(g) {

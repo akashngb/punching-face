@@ -1,7 +1,11 @@
-// Cornerman: the OMNI Live coach. It sees (webcam keyframes), hears (your voice, hands-free),
-// and speaks (streamed audio you can interrupt). Perception stays on this device at 30 Hz; only
-// a spoken question, up to four small keyframes and a few numbers leave it, once per turn, and
-// only while the coach is switched on. The key never reaches this page: the loopback relay holds it.
+// The OMNI Live voice in the room. It sees (webcam keyframes), hears (your voice, hands-free), and
+// speaks (streamed audio you can interrupt). Two modes, picked in the panel and sent with every turn:
+// `face` — the head you are punching, talking back, which is the default; `coach` — a cornerman
+// calling corrections. Only the system prompt and the labels change; the transport is identical.
+//
+// Perception stays on this device at 30 Hz; only a spoken question, up to four small keyframes and a
+// few numbers leave it, once per turn, and only while the panel is switched on. The key never reaches
+// this page: the loopback relay holds it.
 import {
   downsample,
   encodeWav,
@@ -13,6 +17,7 @@ import {
 } from './audio.js';
 import { EventStream } from './sse.js';
 import { obs } from './sentry.js';
+import { createMouthSignal, createSyntheticSignal } from '../omni/mouth-signal.js';
 
 const TAP =
   "class Tap extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('punching-face-tap',Tap)";
@@ -22,54 +27,50 @@ const FRAME_MS = 20,
   KEYFRAMES = 4,
   QUIET_AFTER_TURN_MS = 7000,
   PUNCHES_PER_CUE = 8;
+const MODE_KEY = 'punching-face-sponsors-mode';
+const MODES = {
+  face: {
+    label: 'Face',
+    tab: 'The Face',
+    start: 'Wake the face',
+    stop: 'Shut it up',
+    speaker: 'Face: ',
+    ask: '…or type something to say to it',
+    see: 'Let it see me',
+    talk: 'Let it talk back between punches',
+    idle: 'Listening. Say something to it, or just hit it.',
+    off: 'The face is off. Nothing is being sent.',
+  },
+  coach: {
+    label: 'Coach',
+    tab: 'Cornerman',
+    start: 'Start coach',
+    stop: 'Stop coach',
+    speaker: 'Coach: ',
+    ask: '…or type a question',
+    see: 'Let the coach see me',
+    talk: 'Speak up on combos and personal bests',
+    idle: 'Listening. Ask “how is my guard?” or throw a combo.',
+    off: 'Coach is off. Nothing is being sent.',
+  },
+};
 
-export function createCornerman({ api, panel, config, stats, refreshConfig }) {
-  panel.innerHTML = /* HTML */ ` <div class="sd-row" style="margin-top:0">
-      <button class="primary" data-k="toggle" style="flex:1">Start coach</button
-      ><span class="sd-badge" data-k="model"></span>
-    </div>
+export function createCornerman({ api, panel, config, stats, refreshConfig, onMode }) {
+  panel.innerHTML = `
+    <div class="sd-row" style="margin-top:0"><select data-k="mode" aria-label="Who is talking"><option value="face">Trash talk — the face</option><option value="coach">Coach — a cornerman</option></select></div>
+    <div class="sd-row"><button class="primary" data-k="toggle" style="flex:1">Wake the face</button><span class="sd-badge" data-k="model"></span></div>
     <div class="sd-meter" data-k="meter"><i></i></div>
     <div class="sd-status" data-k="status">
       Hands-free: just talk. Your fists are busy, so there is nothing to press.
     </div>
     <div class="sd-log" data-k="log" aria-live="polite"></div>
-    <div class="sd-row">
-      <input
-        type="text"
-        data-k="ask"
-        placeholder="…or type a question"
-        maxlength="300"
-      /><button data-k="send">Ask</button>
-    </div>
-    <label class="sd-check"
-      ><input type="checkbox" data-k="vision" checked /><span
-        >Let the coach see me
-        <span class="sd-badge leaving" data-k="leaving"></span></span
-    ></label>
-    <label class="sd-check"
-      ><input type="checkbox" data-k="voice" checked /><span
-        >Spoken replies (interrupt by talking)</span
-      ></label
-    >
-    <label class="sd-check"
-      ><input type="checkbox" data-k="proactive" checked /><span
-        >Speak up on combos and personal bests</span
-      ></label
-    >
-    <details>
-      <summary>OMNI key</summary>
-      <div class="sd-status">
-        Stored only on this computer (<code>.local/secrets/omni.json</code>, mode 0600).
-        Get one from the Huawei form; the gateway is <span data-k="gateway"></span>.
-      </div>
-      <div class="sd-row">
-        <input
-          type="password"
-          data-k="key"
-          placeholder="API key"
-          autocomplete="off"
-        /><button data-k="save">Save</button>
-      </div>
+    <div class="sd-row"><input type="text" data-k="ask" maxlength="300"><button data-k="send">Ask</button></div>
+    <label class="sd-check"><input type="checkbox" data-k="vision" checked><span data-k="seelabel">Let it see me </span><span class="sd-badge leaving" data-k="leaving"></span></label>
+    <label class="sd-check"><input type="checkbox" data-k="voice" checked><span>Spoken replies (interrupt by talking)</span></label>
+    <label class="sd-check"><input type="checkbox" data-k="proactive" checked><span data-k="talklabel"></span></label>
+    <details><summary>OMNI key</summary>
+      <div class="sd-status">Stored only on this computer (<code>.local/secrets/omni.json</code>, mode 0600). Get one from the Huawei form; the gateway is <span data-k="gateway"></span>.</div>
+      <div class="sd-row"><input type="password" data-k="key" placeholder="API key" autocomplete="off"><button data-k="save">Save</button></div>
     </details>`;
   const el = Object.fromEntries(
     [...panel.querySelectorAll('[data-k]')].map((n) => [n.dataset.k, n]),
@@ -80,6 +81,8 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     out = null,
     streamOut = null,
     gate = null,
+    mouth = null,
+    synthetic = null,
     enabled = false,
     busy = false,
     controller = null,
@@ -94,6 +97,17 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     history = [];
   const playing = new Set(),
     grab = document.createElement('canvas');
+  let mode = (() => {
+    try {
+      return MODES[localStorage.getItem(MODE_KEY)]
+        ? localStorage.getItem(MODE_KEY)
+        : 'face';
+    } catch {
+      return 'face';
+    }
+  })();
+  const voice = () => MODES[mode];
+  el.mode.value = mode;
 
   const status = (text, error = false) => {
     el.status.textContent = text;
@@ -102,7 +116,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
   const say = (who, text) => {
     const p = document.createElement('p');
     p.className = who;
-    p.textContent = (who === 'you' ? 'You: ' : 'Coach: ') + text;
+    p.textContent = (who === 'you' ? 'You: ' : voice().speaker) + text;
     el.log.append(p);
     el.log.scrollTop = el.log.scrollHeight;
     return p;
@@ -117,9 +131,14 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
       : el.vision.checked
         ? `≤${KEYFRAMES} keyframes + voice per turn → ${omni.gateway}`
         : 'voice + numbers only';
-    el.toggle.textContent = enabled ? 'Stop coach' : 'Start coach';
+    el.toggle.textContent = enabled ? voice().stop : voice().start;
     el.toggle.classList.toggle('danger', enabled);
     el.toggle.classList.toggle('primary', !enabled);
+    el.ask.placeholder = voice().ask;
+    el.seelabel.textContent = voice().see + ' ';
+    el.talklabel.textContent = voice().talk;
+    el.mode.value = mode;
+    onMode?.(voice().tab);
   }
 
   function stopSpeaking() {
@@ -133,6 +152,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     playing.clear();
     nextTime = 0;
     speechSynthesis?.cancel();
+    synthetic?.stop();
     if (gate) gate.ratio = 3.2;
   }
   function play(samples, rate) {
@@ -146,7 +166,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     nextTime = at + buffer.duration;
     playing.add(source);
     // The mic hears the speakers. Echo cancellation does most of the work; a stiffer gate does the rest,
-    // so the coach cannot interrupt itself but a person talking over it still can.
+    // so the face cannot interrupt itself but a person talking over it still can.
     gate.ratio = 8;
     source.onended = () => {
       playing.delete(source);
@@ -173,6 +193,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     lastTurnAt = performance.now();
     const sent = el.vision.checked ? frames.slice() : [];
     const body = {
+      mode,
       frames: sent,
       telemetry: stats.snapshot(performance.now(), trigger),
       history: history.slice(-6),
@@ -189,11 +210,13 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     let said = '',
       mock = false,
       started = performance.now(),
-      firstAt = null;
+      firstAt = null,
+      served = null;
     try {
       await obs.span(
         'coach.turn',
         {
+          'coach.mode': mode,
           'coach.trigger': trigger || (audio ? 'voice' : 'text'),
           'coach.frames': sent.length,
           'coach.audio_ms': audio
@@ -210,7 +233,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
           if (!response.ok)
             throw new Error(
               (await response.json().catch(() => ({}))).error ||
-                'Coach relay refused the request.',
+                'The relay refused the request.',
             );
           const reader = response.body.getReader(),
             decoder = new TextDecoder(),
@@ -225,10 +248,14 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
                 mock = data.mock;
                 span.setAttribute('coach.model', data.model);
                 span.setAttribute('coach.mock', !!data.mock);
+                // A relay that does not echo the mode back predates the selector, so it is still
+                // serving its old system prompt no matter what this page sends.
+                served = data.mode ?? null;
+                span.setAttribute('coach.mode_served', served || 'unknown');
               } else if (event === 'text') {
                 firstAt ??= performance.now();
                 said += data.delta;
-                line.textContent = 'Coach: ' + said;
+                line.textContent = voice().speaker + said;
                 el.log.scrollTop = el.log.scrollHeight;
               } else if (event === 'audio') {
                 firstAt ??= performance.now();
@@ -247,10 +274,19 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
           );
         },
       );
-      if (!said) line.textContent = 'Coach: (no reply)';
+      if (!said)
+        line.textContent =
+          voice().speaker + (mode === 'coach' ? '(no reply)' : '(nothing)');
       // The stand-in has no voice of its own; the browser reads it aloud so the loop can be rehearsed. It is labelled.
-      if (mock && said && el.voice.checked && 'speechSynthesis' in window)
-        speechSynthesis.speak(new SpeechSynthesisUtterance(said));
+      if (mock && said && el.voice.checked && 'speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(said);
+        // speechSynthesis cannot be routed into WebAudio, so the analyser hears nothing.
+        // Drive the stand-in envelope off the utterance instead, as long as it speaks.
+        utterance.onstart = () =>
+          synthetic?.speakFor(Math.max(1.2, said.split(/\s+/).length / 2.6));
+        utterance.onend = utterance.onerror = () => synthetic?.stop();
+        speechSynthesis.speak(utterance);
+      }
       if (said)
         history.push(
           {
@@ -259,13 +295,24 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
           },
           { role: 'assistant', content: said },
         );
-      status(
-        (mock ? 'Mock reply (add an OMNI key for the real model). ' : '') +
-          (firstAt ? `First response in ${Math.round(firstAt - started)} ms.` : ''),
-      );
+      if (served !== null && served !== mode)
+        status(
+          `The relay answered as "${served}", not "${mode}". Restart it: npm run sponsors`,
+          true,
+        );
+      else if (served === null)
+        status(
+          'The relay is running older code and ignored the mode. Restart it: npm run sponsors',
+          true,
+        );
+      else
+        status(
+          (mock ? 'Mock reply (add an OMNI key for the real model). ' : '') +
+            (firstAt ? `First response in ${Math.round(firstAt - started)} ms.` : ''),
+        );
     } catch (error) {
       if (error.name === 'AbortError') {
-        line.textContent = 'Coach: ' + (said || '…') + ' (interrupted)';
+        line.textContent = voice().speaker + (said || '…') + ' (interrupted)';
       } else {
         line.remove();
         status(error.message, true);
@@ -296,7 +343,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
         if (preroll.length > PREROLL_FRAMES) preroll.shift();
       }
       if (event === 'start') {
-        // Barge-in: talking over the coach cuts it off mid-sentence, like a real corner.
+        // Barge-in: talking over it cuts it off mid-sentence. Interrupting the face is the point.
         if (playing.size || busy) {
           stopSpeaking();
           controller?.abort();
@@ -331,6 +378,17 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
       out.connect(ctx.destination);
       streamOut = ctx.createMediaStreamDestination();
       out.connect(streamOut);
+      // The head's mouth follows whatever is coming out of this bus. An analyser is a
+      // leaf tap, so neither the speakers nor the LiveKit guest stream are affected.
+      mouth = createMouthSignal(ctx, out);
+      synthetic = createSyntheticSignal();
+      window.__faceSpeech = {
+        read: (dt) => {
+          const a = mouth.read(dt),
+            b = synthetic.read(dt);
+          return a.open >= b.open ? a : b;
+        },
+      };
       gate = new VoiceGate();
       enabled = true;
       keyTimer = setInterval(keyframe, KEYFRAME_MS);
@@ -350,13 +408,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
         node.port.onmessage = (e) => onAudio(e.data);
         ctx.createMediaStreamSource(mic).connect(node);
         status('Learning the room noise… then just talk.');
-        setTimeout(
-          () =>
-            enabled &&
-            !busy &&
-            status('Listening. Ask “how is my guard?” or throw a combo.'),
-          900,
-        );
+        setTimeout(() => enabled && !busy && status(voice().idle), 900);
       } catch (error) {
         status('No microphone (' + error.name + '). Typed questions still work.', true);
         obs.warn('coach.mic_unavailable', { reason: error.name });
@@ -381,6 +433,10 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     node?.disconnect();
     mic?.getTracks().forEach((t) => t.stop());
     ctx?.close();
+    mouth?.dispose();
+    synthetic?.dispose();
+    mouth = synthetic = null;
+    window.__faceSpeech = null;
     ctx = mic = node = null;
     frames = [];
     recording = null;
@@ -388,13 +444,33 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
     pending = new Float32Array(0);
     el.meter.firstElementChild.style.width = '0';
     paint();
-    status('Coach is off. Nothing is being sent.');
+    status(voice().off);
   }
 
   el.toggle.onclick = () => (enabled ? stop() : start());
   el.vision.onchange = () => {
     if (!el.vision.checked) frames = [];
     paint();
+  };
+  // Switching who is talking cuts the current line off and drops the history: the two personas
+  // would otherwise read each other's turns back and answer in the wrong voice.
+  el.mode.onchange = () => {
+    mode = MODES[el.mode.value] ? el.mode.value : 'face';
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      /* private mode */
+    }
+    controller?.abort();
+    stopSpeaking();
+    history = [];
+    el.log.replaceChildren();
+    paint();
+    status(
+      enabled
+        ? `Switched to ${voice().label.toLowerCase()}. Carry on.`
+        : `${voice().label} is off. Nothing is being sent.`,
+    );
   };
   const ask = () => {
     const text = el.ask.value.trim();
@@ -430,7 +506,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
   paint();
 
   return {
-    // Called for every landed punch, local or remote. The coach volunteers a cue at natural beats,
+    // Called for every landed punch, local or remote. The face answers back at natural beats,
     // never over a person who is speaking, and never back-to-back.
     onPunch(triggers) {
       sinceTurn++;
@@ -445,7 +521,8 @@ export function createCornerman({ api, panel, config, stats, refreshConfig }) {
         return;
       if (triggers.length || sinceTurn >= PUNCHES_PER_CUE)
         turn({
-          trigger: triggers[0] || `${PUNCHES_PER_CUE} punches since the last cue`,
+          trigger:
+            triggers[0] || `${PUNCHES_PER_CUE} punches since it last said anything`,
         });
     },
     get outputStream() {

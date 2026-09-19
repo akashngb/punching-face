@@ -10,6 +10,7 @@ from head_artifacts import HeadArtifactTransaction
 from tests.head_artifacts_test import bundle
 from types import SimpleNamespace
 from urllib.parse import urlparse
+import private_files
 
 
 def frame(yaw=0):
@@ -315,7 +316,9 @@ class CaptureTests(unittest.TestCase):
             openai_capture, 'CONFIG', Path(self.temp.name) / 'secrets/openai.json'
         ):
             openai_capture.configure('sk-' + 'x' * 30)
-            self.assertEqual(openai_capture.CONFIG.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                private_files.holders(openai_capture.CONFIG), private_files.owner_only()
+            )
 
     def test_provider_errors_do_not_echo_key(self):
         from urllib.error import HTTPError

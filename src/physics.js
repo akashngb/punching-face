@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { SkinConstraints } from './skin-constraints.js';
 import { FaceImpactRig } from './impact-rig.js';
 import { impactParameters, DEFAULT_SOFTNESS } from './tissue-field.js';
+import { FaceSpeechRig } from './speech-rig.js';
 
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
@@ -48,6 +49,7 @@ export class FaceDynamics {
       indices: geometry.index?.array,
       normals: geometry.attributes.normal?.array,
     });
+    this.speechRig = new FaceSpeechRig(this.rest);
     this.offset = new Float32Array(this.rest.length);
     this.velocity = new Float32Array(this.rest.length);
     this.posedRest = new Float32Array(this.rest);
@@ -93,6 +95,15 @@ export class FaceDynamics {
     }
     this.lastImpact = null;
     this.regionPeaks = { cheeks: 0, nose: 0, lips: 0, forehead: 0, jaw: 0 };
+  }
+  // A landed punch reads over the top of a sentence rather than fighting it:
+  // the speech rig is scaled down while an impact is at its loudest, then
+  // returns as the impact decays. Cheap — the event queue is at most four.
+  get speechDuck() {
+    let peak = 0;
+    for (const event of this.impactRig.events)
+      peak = Math.max(peak, this.impactRig.envelope(event.age));
+    return 1 - clamp(peak, 0, 1) * 0.85;
   }
 
   get headMode() {
@@ -174,13 +185,18 @@ export class FaceDynamics {
           (movement.getComponent(j) * weight +
             outward.getComponent(j) * ring * this.bulge * 0.36);
     }
-    this.applyRecoil(point,direction,speed);
+    this.applyRecoil(point, direction, speed);
     return Math.max(affected, affectedRig);
   }
 
-  applyRecoil(point,direction,speed){
-    const a=this.impactRig.anchors,center=new THREE.Vector3(a[13][0],a[159][1]-.025,a[13][2]-.075);
-    const torque=point.clone().sub(center).cross(direction).multiplyScalar(clamp(speed,0,4)*16);
+  applyRecoil(point, direction, speed) {
+    const a = this.impactRig.anchors,
+      center = new THREE.Vector3(a[13][0], a[159][1] - 0.025, a[13][2] - 0.075);
+    const torque = point
+      .clone()
+      .sub(center)
+      .cross(direction)
+      .multiplyScalar(clamp(speed, 0, 4) * 16);
     this.recoilVelocity.add(torque);
   }
   rigDelta(x, y, z) {
@@ -209,6 +225,7 @@ export class FaceDynamics {
   step(dt) {
     dt = clamp(dt, 0, 1 / 30);
     this.impactRig.step(dt);
+    this.speechRig.step(dt, this.speechDuck);
     for (let i = 0; i < this.rest.length; i += 3) {
       const d = this.rigDelta(this.rest[i], this.rest[i + 1], this.rest[i + 2]);
       for (let j = 0; j < 3; j++) this.posedRest[i + j] = this.rest[i + j] + d[j];
@@ -272,7 +289,10 @@ export class FaceDynamics {
     for (let i = 0; i < p.length; i += 3) {
       for (let j = 0; j < 3; j++)
         p[i + j] =
-          this.posedRest[i + j] + this.offset[i + j] + this.impactRig.offset[i + j];
+          this.posedRest[i + j] +
+          this.offset[i + j] +
+          this.impactRig.offset[i + j] +
+          this.speechRig.offset[i + j];
       const amount = Math.hypot(
         this.offset[i] + this.impactRig.offset[i],
         this.offset[i + 1] + this.impactRig.offset[i + 1],
@@ -338,6 +358,7 @@ export class FaceDynamics {
       this.impactRig.events = [];
       this.impactRig.offset.set(this.impactRig.permanent);
     }
+    this.speechRig.reset();
     this.recoil.set(0, 0, 0);
     this.recoilVelocity.set(0, 0, 0);
   }

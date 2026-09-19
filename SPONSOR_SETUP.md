@@ -36,7 +36,7 @@ Paste keys into the dock (**OMNI key** / **LiveKit keys** sections). They go to 
 
 | Service | How to get it | Fields / env vars |
 |---|---|---|
-| **OMNI** | Huawei's form: <https://luma.com/0fhypcu0> (200 keys, first come; one per team; arrives by email) | `apiKey` / `OMNI_API_KEY`. Optional: `OMNI_MODEL` (default `qwen3.5-omni-flash`), `OMNI_BASE_URL` (default `https://yibuapi.com/v1`), `OMNI_VOICE` (default `Cherry`) |
+| **OMNI** | Huawei's form: <https://luma.com/0fhypcu0> (200 keys, first come; one per team; arrives by email) | `apiKey` / `OMNI_API_KEY`. Optional: `OMNI_MODEL` (default `qwen3.5-omni-flash`), `OMNI_BASE_URL` (default `https://yibuapi.com/v1`), `OMNI_VOICE` (default `Ethan`; `Cherry`/`Chelsie` are rejected by yibuapi) |
 | **Sentry** | Create a project at sentry.io; copy its DSN. One DSN works for both; two projects (browser + Python) read better | `.local/secrets/sentry.json`: `{"browserDsn":"…","pythonDsn":"…"}` or `SENTRY_DSN_BROWSER` / `SENTRY_DSN`. Python side needs `pip install -r requirements-sponsors.txt` in **both** envs (already done on this machine) |
 | **LiveKit** (only for other devices) | Free project at cloud.livekit.io → Settings → Keys. Also switch on **Development token server** and copy its id | `url` (`wss://…`), `apiKey`, `apiSecret`, `tokenServerId`, `guestUrl` |
 

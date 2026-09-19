@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from PIL import Image
+from private_files import restrict
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / '.local/secrets/openai.json'
@@ -33,11 +34,11 @@ def configure(key, model='gpt-4o-mini'):
     if model not in ('gpt-4o-mini', 'gpt-4o'):
         raise ValueError('Choose a supported vision review model.')
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG.parent.chmod(0o700)
+    restrict(CONFIG.parent)
     fd = os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as f:
         json.dump({'apiKey': key, 'model': model}, f)
-    CONFIG.chmod(0o600)
+    restrict(CONFIG)
 
 
 def request(

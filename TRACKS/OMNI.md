@@ -53,7 +53,10 @@ Both transports verified end-to-end 2026-09-19:
 - [x] **Apply for API credits.** Team key delivered 2026-09-19. Never commit the key. Stored 0600 at `.local/secrets/omni.json` and `.env`.
 - [x] **Smoke test the key.** `.venv/bin/python scripts/omni_smoke_test.py` picks Plan A. Report at `.local/omni-smoke/report.json`.
 - [x] **Confirm gateway capabilities.** Realtime WS available. Voice cloning NOT available on yibuapi (`/audio/voices` 404). Accepted voices for this key: Ethan / Serena / Dylan.
-- [ ] **Log every call.** `.local/usage/yibu_api_calls.jsonl` is the ledger, written by all three entry points. `npm run omni:report` generates the two files organizers require.
+- [x] **Log every call.** Sponsor package extracted to `.local/third_party/yibuapi-examples/`, so
+  `yibu_audit.append_audit_record` now resolves instead of silently falling back to `None` — before that,
+  every call would have gone unrecorded with no warning. Ledger: `.local/usage/yibu_api_calls.jsonl`.
+  **The extraction is per-machine**: check `append_audit_record` is not `None` on any laptop that will make calls.
 - [ ] **Submit report by 2026-09-20 23:59 EDT.** Attach `usage_summary.json` and `usage_by_model_key_purpose.csv` to a reply to the approval email.
 
 ---
@@ -84,16 +87,22 @@ Full challenge details: <https://github.com/cari-waterloo-rc/OMNI-Live-Build-the
 
 ## 2. Why Arena uses OMNI
 
-Arena is a live boxing partner. Your hands are busy and your eyes are on the target, so **voice + vision is the only viable interface** during a round.
+Arena is the head you are punching, given a voice. It is the target, not a coach. Your hands are busy and your eyes are on it, so **voice + vision is the only viable interface** during a round.
 
 | Modality | Arena use |
 | --- | --- |
-| Vision (video frames) | Stance, dropped guard, telegraphed punches |
-| Speech in (voice) | "hold on", trash-talk, breathing, questions between rounds |
-| Speech out | Grunts, taunts, coaching callouts |
-| Language | Opponent persona, round summary |
+| Vision (video frames) | What the face sees coming: stance, dropped guard, telegraphed punches |
+| Speech in (voice) | "hold on", trash-talk it answers, breathing, questions between rounds |
+| Speech out | Grunts on impact, taunts between exchanges, flaws called out as threats |
+| Language | The face's persona (`arenaPersona()`, `FACE` in `sponsor_server.py`), round summary |
 
-A chatbot can't see your guard drop. A vision-only model can't answer "how did I look on that combo?" OMNI's streaming, interruptible loop closes that gap.
+Two personas ship, picked from a selector at the top of the panel and sent as `mode` on every turn:
+**face** (default) is the head talking back and trash-talking; **coach** is the original cornerman calling
+corrections. Only the system prompt and the labels change — same transport, same tools, same telemetry.
+The choice is remembered in `localStorage['punching-face-sponsors-mode']`, which the shared-engine Arena
+reads too (`personaFor()` in `src/scenarios/arena/tools.js`), so one selector drives both paths.
+
+A chatbot can't see your guard drop. A vision-only model can't answer back when you hit it. OMNI's streaming, interruptible loop closes that gap.
 
 ---
 
@@ -138,7 +147,7 @@ If the OMNI session drops mid-round, the classifier keeps firing local physical 
 - Voice control (emotion + style flow through the persona and instructions)
 - Voice cloning (Plan A only; smoke-test verifies availability at the gateway — not offered by yibuapi)
 
-Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-realtime` via `OMNI_REALTIME_MODEL` when latency headroom allows.
+Models: `qwen3.5-omni-plus-realtime` by default — it is on the sponsored key's enabled list and `qwen3.5-omni-flash-realtime` is not. Voice `Ethan`; `Cherry`/`Chelsie` return 400 on yibuapi.
 
 ---
 
