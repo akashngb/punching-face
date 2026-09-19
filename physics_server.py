@@ -71,4 +71,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__=='__main__':
     print('Newton CPU service http://127.0.0.1:5175',flush=True)
+    # Optional Sentry tracing (SPONSOR_SETUP.md). /physics/step is sampled at 2% there. A no-op without a DSN.
+    try:import sponsor_obs;sponsor_obs.init('physics');sponsor_obs.instrument_http(Handler)
+    except ImportError:pass
     ThreadingHTTPServer(('127.0.0.1',5175),Handler).serve_forever()

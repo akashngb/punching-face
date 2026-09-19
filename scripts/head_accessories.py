@@ -3,6 +3,7 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt,gaussian_filter
 from PIL import Image
 import cv2
+from scripts.photo_detail import brow_mask
 
 PATH_KEYS=('imageLeftLens','imageRightLens','bridge','imageLeftTemple','imageRightTemple')
 
@@ -39,11 +40,16 @@ def clean_view(pixels,filename,spec,frame,frames=None,return_details=False,proje
     # Narrow geometric masks remove only the actual opaque frame; the eyes,
     # eyebrows and all other measured identity features remain in the photo.
     eye_width=abs(frame['landmarks'][263]['x']-frame['landmarks'][33]['x'])*rgb.shape[1] if frame.get('landmarks') else (spec['crops'][view['filename']][2]-spec['crops'][view['filename']][0])*.45
-    thickness=max(3,int(eye_width*.09))
+    thickness=max(2,int(eye_width*.035))
     for name,path in paths.items():
         points=np.rint(path).astype(np.int32)
         cv2.polylines(mask,[points],name.endswith('Lens') and len(points)>=8,255,thickness,lineType=cv2.LINE_AA)
-    if projected_mask is not None:mask=np.maximum(mask,projected_mask)
+    if projected_mask is not None:
+        # Approximate 3D rims must not expand a measured contour over the brow.
+        nearby=cv2.dilate(mask,np.ones((5,5),np.uint8))
+        mask=np.maximum(mask,np.minimum(projected_mask,nearby))
+    protected=brow_mask(rgb.shape,frame)
+    mask[protected>0]=0
     if not mask.any():return result(pixels,method='no-visible-contour')
     rgb=cv2.inpaint(rgb,mask,max(3,thickness//2),cv2.INPAINT_TELEA)
     output=pixels.copy();output[:,:,:3]=rgb;return result(output,mask,'opaque-frame-inpaint')
@@ -52,18 +58,64 @@ def sample_frame_colors(folder,spec):
     """Sample opaque frame centerlines into the eyewear material ONLY."""
     samples=[]
     for view in spec.get('views',[]):
-        pixels=np.asarray(Image.open(folder/'images'/view['filename']).convert('RGB'))/255.
+        image=np.asarray(Image.open(folder/'images'/view['filename']).convert('RGBA'));pixels=image[:,:,:3]/255.
         h,w=pixels.shape[:2]
         for path in paths_pixels(view,spec['crops'][view['filename']]).values():
             for a,b in zip(path[:-1],path[1:]):
                 xy=a[None]+np.linspace(0,1,max(2,int(np.linalg.norm(b-a))))[:,None]*(b-a)[None]
                 ij=np.rint(xy).astype(int);inside=(ij[:,0]>=0)&(ij[:,0]<w)&(ij[:,1]>=0)&(ij[:,1]<h)
-                ij=ij[inside];samples.extend(pixels[ij[:,1],ij[:,0]])
+                ij=ij[inside];ij=ij[image[ij[:,1],ij[:,0],3]>200];samples.extend(pixels[ij[:,1],ij[:,0]])
     if not samples:return None
     samples=np.asarray(samples);base=np.asarray(spec['glasses']['frameColorSrgb'])
     # Reject skin/lens pixels where an approximate path is a few pixels off.
     distance=np.linalg.norm(samples-base,axis=1);good=samples[distance<.20]
-    return np.median(good,axis=0).tolist() if len(good)>16 else None
+    if len(good)<16:return None
+    luminance=good@np.array([.2126,.7152,.0722]);opaque=good[luminance<=np.quantile(luminance,.35)]
+    return np.median(opaque,axis=0).tolist()
+
+
+def fit_temple(hinge,sign,spec,rec,center,B,scale,p):
+    """Lift a visible profile contour onto a bounded side plane.
+
+    The photo supplies the vertical path and ear bend. Lateral depth remains
+    estimated, with a local clearance constraint against the fitted surface.
+    """
+    candidates=[]
+    for view in spec['views']:
+        im=next((im for im in rec.images.values() if im.name==view['filename']),None)
+        if im is None:continue
+        origin=(im.projection_center()-center)@B.T*scale
+        angle=np.degrees(np.arctan2(origin[0]*sign,origin[2]))
+        if not 35<angle<110:continue
+        cam=rec.cameras[im.camera_id];pose=im.cam_from_world()
+        for key,xy in paths_pixels(view,spec['crops'][im.name]).items():
+            if not key.endswith('Temple') or len(xy)<3:continue
+            rays=np.column_stack([cam.cam_from_img(xy),np.ones(len(xy))])@pose.rotation.matrix()@B.T
+            if np.any(abs(rays[:,0])<.15):continue
+            sides=np.full(len(xy),hinge[0])
+            for _ in range(6):
+                q=origin+rays*((sides-origin[0])/rays[:,0])[:,None]
+                for j,point in enumerate(q):
+                    section=p[(np.abs(p[:,1]-point[1])<.006)&(np.abs(p[:,2]-point[2])<.008)&(p[:,0]*sign>0)]
+                    surface=float(np.quantile(section[:,0]*sign,.95)) if len(section) else abs(hinge[0])
+                    sides[j]=sign*max(abs(hinge[0]),surface+.002)
+            q=origin+rays*((sides-origin[0])/rays[:,0])[:,None]
+            if np.linalg.norm(q[-1]-hinge)<np.linalg.norm(q[0]-hinge):q=q[::-1]
+            error=np.linalg.norm(q[0]-hinge)
+            if error>.035 or q[0,2]-q[-1,2]<.045 or q[-1,2]<-.2:continue
+            # A short hinge transition meets the observed arm without a kink.
+            ordered=[hinge]
+            for point in q[1:]:
+                if point[2]<ordered[-1][2]-.003:ordered.append(point)
+            if len(ordered)<3:continue
+            candidates.append((abs(angle-80)+error*1000,np.asarray(ordered),im.name))
+    if candidates:
+        _,q,name=min(candidates,key=lambda v:v[0])
+        if q[-1,1]>hinge[1]-.012:
+            q=np.vstack([q,q[-1]+[sign*-.002,-.014,-.012]])
+        return q,{'method':'profile-contour','view':name,'lateralDepthEstimated':True}
+    q=np.array([hinge,hinge+[sign*.002,0,-.015],hinge+[sign*.005,-.001,-.070],hinge+[sign*.006,-.003,-.105],hinge+[sign*.004,-.018,-.120]])
+    return q,{'method':'estimated-ear-hook','lateralDepthEstimated':True}
 
 
 def build_glasses(p,spec,rec,frames,center,B,transform):
@@ -84,17 +136,8 @@ def build_glasses(p,spec,rec,frames,center,B,transform):
     rims=[lift(paths[k]) for k in ['imageLeftLens','imageRightLens'] if k in paths and len(paths[k])>=8]
     if len(rims)!=2:return None
     bridge=lift(paths['bridge']) if 'bridge' in paths else np.array([rims[0][np.argmax(rims[0][:,0])],rims[1][np.argmin(rims[1][:,0])]])
-    temples=[]
+    temples=[];temple_fit=[]
     for rim in rims:
         sign=np.sign(rim[:,0].mean());outer=np.where(rim[:,0]*sign>(rim[:,0]*sign).max()-.005)[0];i=outer[np.argmax(rim[outer,1])];hinge=rim[i].copy()
-        # Temple arms are a smooth, editable prior behind observed front rims.
-        y=hinge[1];arm=[hinge]
-        for depth,drop in [(-.025,0),(-.055,.001),(-.085,.003),(-.112,.007),(-.119,.020)]:
-            height=y-drop;section=p[(np.abs(p[:,1]-height)<.009)&(np.abs(p[:,2]-depth)<.008)&(p[:,0]*sign>0)]
-            outer=float(np.quantile(section[:,0]*sign,.92))+.003 if len(section) else half_width+.003
-            # Follow the fitted temple rather than flaring immediately out to
-            # the widest point of the cheek/ear.
-            side=sign*max(abs(hinge[0]),outer)
-            arm.append([side,height,depth])
-        temples.append(np.asarray(arm))
-    return {'type':'eyeglasses','source':'Astra photo contours + recovered frontal camera; depth and temple fit estimated','model':spec['model'],'rims':[r.tolist() for r in rims],'bridge':bridge.tolist(),'temples':[t.tolist() for t in temples],'frameColor':info['frameColorSrgb'],'radius':info['frameRadiusMm']*.001,'templeWidth':info['templeWidthMm']*.001,'lensTint':info['lensTint'],'estimated':True,'description':info['description']}
+        arm,audit=fit_temple(hinge,sign,spec,rec,center,B,transform['scale'],p);temples.append(arm);temple_fit.append(audit)
+    return {'type':'eyeglasses','version':2,'source':'Photo-fitted front and profile contours; lateral depth estimated','model':spec['model'],'rims':[r.tolist() for r in rims],'bridge':bridge.tolist(),'temples':[t.tolist() for t in temples],'templeFit':temple_fit,'frameColor':info['frameColorSrgb'],'radius':info['frameRadiusMm']*.001,'templeWidth':info['templeWidthMm']*.001,'lensTint':info['lensTint'],'estimated':True,'description':info['description']}

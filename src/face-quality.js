@@ -11,6 +11,7 @@ export function faceQuality(result,width,height,previous){
   const eye=Math.hypot((lm[33].x-lm[263].x)*width,(lm[33].y-lm[263].y)*height),mouth=Math.hypot((lm[13].x-lm[14].x)*width,(lm[13].y-lm[14].y)*height);
   if(mouth/Math.max(eye,1)>.12)return {ok:false,message:'Close your mouth and keep a neutral expression throughout the scan.'};
   if(previous&&Math.hypot(yaw-previous.yaw,pitch-previous.pitch)<1.2)return {ok:false,message:'Turn slowly to a new angle; repeated views are skipped.'};
-  return {ok:true,yaw,pitch,landmarks:lm.slice(0,468).map(p=>({x:p.x,y:p.y})),oval};
+  const iris=lm.slice(468,478),irisLandmarks=iris.length===10&&iris.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1)?iris.map(p=>({x:p.x,y:p.y})):null;
+  return {ok:true,yaw,pitch,landmarks:lm.slice(0,468).map(p=>({x:p.x,y:p.y})),irisLandmarks,oval};
 }
 export function captureCoverage(frames){const yaw=frames.map(f=>f.yaw).filter(Number.isFinite);return {front:yaw.some(x=>Math.abs(x)<10),left:yaw.some(x=>x<=-25),right:yaw.some(x=>x>=25),headOnly:frames.length-yaw.length,count:frames.length};}

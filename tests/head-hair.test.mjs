@@ -54,3 +54,53 @@ test('photo-guided detail stays close to captured locks and skips unseen roots w
  for(let i=0;i<points.length;i++)assert.ok(Math.abs(points[i]-before[i]-(i%3===0?.01:0))<1e-7);
  const saved=new HeadHair(g,JSON.parse(JSON.stringify(hair.spec)));assert.equal(saved.material.isMeshBasicMaterial,true);hair.dispose();saved.dispose();g.dispose();
 });
+
+function tracedFixture(){
+ const {g,spec}=fixture();spec.version=3;spec.mode='photo-strands';
+ const segments=18,offsets=[],normals=[];
+ for(let i=0;i<12;i++)for(let j=0;j<=segments;j++){
+  const t=j/segments;offsets.push((t-.5)*.036,0,Math.sin(t*Math.PI*2)*.0018);normals.push(0,1,0);
+ }
+ spec.photoGuides={directions:Array.from({length:12},()=>[1,0,0]).flat(),colors:Array.from({length:12},()=>[.14,.1,.07]).flat(),confidence:Array(12).fill(.6),curveOffsets:offsets,curveNormals:normals,segments,referenceLengthMm:50};
+ return {g,spec};
+}
+test('captured locks have continuous centimeter-scale waves, physical shading and relief',()=>{
+ const {g,spec}=tracedFixture(),hair=new HeadHair(g,spec),position=hair.geometry.attributes.position.array;
+ assert.equal(hair.strandCount,36);assert.ok(hair.material.isMeshPhysicalMaterial);assert.ok(hair.material.anisotropy>.5);
+ hair.geometry.computeBoundingBox();const size=hair.geometry.boundingBox.getSize(new THREE.Vector3());
+ assert.ok(size.x>.034);assert.ok(size.y>.0004);assert.ok(size.y<.006);assert.ok(size.z>.003);
+ assert.ok(position.every(Number.isFinite));assert.ok(hair.geometry.attributes.normal.array.every(Number.isFinite));
+ const copy=new HeadHair(g,JSON.parse(JSON.stringify(hair.spec)));assert.deepEqual(copy.geometry.attributes.position.array,position);
+ const saved=position.slice();g.translate(.01,.003,-.002);hair.updateSurface(g);
+ for(let i=0;i<position.length;i++)assert.ok(Math.abs(position[i]-saved[i]-[.01,.003,-.002][i%3])<1e-7);
+ hair.rebuild(g,{frizz:.9,rootLiftMm:10});assert.notDeepEqual(hair.geometry.attributes.position.array,position);
+ hair.dispose();copy.dispose();g.dispose();
+});
+test('traced locks reject damaged session curves before allocating geometry',()=>{
+ const {g,spec}=tracedFixture();spec.photoGuides.curveOffsets[1]=Infinity;assert.throws(()=>new HeadHair(g,spec),/Invalid photographic hair curves/);
+ spec.photoGuides.curveOffsets[1]=0;spec.photoGuides.segments=100000;assert.throws(()=>new HeadHair(g,spec),/segments/);g.dispose();
+});
+test('photographic curve stations follow local edits and retain sampled colors',()=>{
+ const {g,spec}=tracedFixture();
+ const p=[...g.attributes.position.array,.04,.13,-.04];g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));g.setIndex([0,1,2,1,3,2]);g.deleteAttribute('normal');g.computeVertexNormals();
+ const guides=spec.photoGuides;guides.observedOnly=true;spec.rootCount=12;
+ guides.curveColors=guides.curveOffsets.map((_,i)=>[.09,.06,.04][i%3]);
+ guides.curveBindings={triangles:[],weights:[]};
+ for(let i=0;i<12;i++)for(let j=0;j<=guides.segments;j++){guides.curveBindings.triangles.push(...(j<9?[0,1,2]:[3,1,2]));guides.curveBindings.weights.push(1,0,0);}
+ const hair=new HeadHair(g,spec);assert.ok(hair.material.isMeshBasicMaterial);
+ const before=hair.geometry.attributes.position.array.slice();g.attributes.position.array[10]+=.004;hair.updateSurface(g);
+ const after=hair.geometry.attributes.position.array;assert.equal(after[1],before[1]);assert.ok(Math.abs(after[18*9+1]-before[18*9+1]-.004)<1e-6);
+ const copy=new HeadHair(g,JSON.parse(JSON.stringify(hair.spec)));assert.ok(copy.curveBinding);copy.dispose();hair.dispose();g.dispose();
+});
+test('exported traced fibers keep anisotropy and editable source paths through GLB',async()=>{
+ const {GLTFExporter}=await import('three/addons/exporters/GLTFExporter.js');
+ const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
+ const old=globalThis.FileReader;globalThis.FileReader=class {readAsArrayBuffer(blob){blob.arrayBuffer().then(result=>{this.result=result;this.onloadend?.();});}};
+ try{
+  const {g,spec}=tracedFixture(),hair=new HeadHair(g,spec);hair.userData.groom=hair.spec;
+  const binary=await new GLTFExporter().parseAsync(hair,{binary:true}),parsed=await new GLTFLoader().parseAsync(binary,'');
+  const restored=parsed.scene.children[0];assert.deepEqual(restored.userData.groom.photoGuides.curveOffsets,spec.photoGuides.curveOffsets);
+  assert.equal(restored.material.anisotropy,.8);assert.deepEqual(restored.geometry.attributes.position.array,hair.geometry.attributes.position.array);
+  hair.dispose();g.dispose();
+ }finally{globalThis.FileReader=old;}
+});

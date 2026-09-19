@@ -27,6 +27,13 @@ class CaptureTests(unittest.TestCase):
         bad=frame();bad['landmarks'][4]['x']=float('nan')
         with self.assertRaises(ValueError):self.store.append(self.id,[frame(),bad])
         self.assertEqual(self.store.list()[0]['frames'],0);self.assertEqual(list((self.store.folder(self.id)/'images').iterdir()),[])
+    def test_optional_iris_measurements_survive_capture_and_are_validated(self):
+        good=frame();good['irisLandmarks']=[{'x':.4,'y':.45} for _ in range(10)]
+        self.store.append(self.id,[good]);saved=json.loads((self.store.folder(self.id)/'capture.json').read_text())['frames'][0]
+        self.assertEqual(saved['irisLandmarks'],good['irisLandmarks'])
+        bad=frame();bad['irisLandmarks']=[{'x':float('nan'),'y':.5}]*10
+        with self.assertRaisesRegex(ValueError,'Iris landmarks'):self.store.append(self.id,[frame(),bad])
+        self.assertEqual(self.store.list()[0]['frames'],1)
     def test_rear_frames_are_retained_without_inventing_face_landmarks(self):
         identifier=self.store.create(capture_region='head')['id'];rear=frame();rear.update(yaw=None,landmarks=None,timeSeconds=24.5)
         self.store.append(identifier,[frame(-30),rear,frame(30)])
@@ -40,6 +47,41 @@ class CaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'24'):self.store.train(self.id,False)
         for _ in range(4):self.store.append(self.id,[frame()]*6)
         with self.assertRaisesRegex(ValueError,'both sides'):self.store.train(self.id,False)
+    def test_video_timing_persists_without_invalidating_capture_hash(self):
+        from pipeline_timing import PipelineTimer
+        path=self.store.folder(self.id);before=(path/'capture.json').read_bytes()
+        self.store.timing(self.id,{'kind':'video','filename':'sample.mov','durationSeconds':24.3,'extractionSeconds':15.6,'extractionComplete':True})
+        timer=PipelineTimer(path);timer.mark('cameras');timer.mark('texture');timer.finish()
+        self.store.timing(self.id,{'kind':'load','seconds':1.25})
+        self.store.timing(self.id,{'kind':'load','seconds':9})
+        again=FaceStore(self.store.root).timing(self.id)
+        self.assertEqual(again['source']['filename'],'sample.mov');self.assertEqual(again['timing']['loadSeconds'],1.25)
+        self.assertEqual([s['stage'] for s in again['timing']['stages']],['cameras','texture'])
+        self.assertEqual((path/'capture.json').read_bytes(),before)
+        with self.assertRaises(ValueError):self.store.timing(self.id,{'kind':'load','seconds':float('nan')})
+    def test_saved_video_supports_seeking_and_rejects_partial_uploads(self):
+        self.store.timing(self.id,{'kind':'video','filename':'sample.mov','durationSeconds':24.3,'extractionSeconds':1,'extractionComplete':True})
+        class Request:
+            def __init__(self,method,headers,body=b''):
+                self.command=method;self.headers=headers;self.rfile=io.BytesIO(body);self.wfile=io.BytesIO();self.response_headers={}
+            def send_response(self,code):self.code=code
+            def send_header(self,key,value):self.response_headers[key]=value
+            def end_headers(self):pass
+        self.store.video(Request('POST',{'Content-Type':'video/quicktime','Content-Length':'10'},b'0123456789'),self.id)
+        self.assertTrue(self.store.timing(self.id)['source']['videoStored'])
+        for value,expected in [('bytes=2-5',b'2345'),('bytes=-3',b'789'),('bytes=7-',b'789')]:
+            request=Request('GET',{'Range':value});self.store.video(request,self.id);self.assertEqual(request.code,206);self.assertEqual(request.wfile.getvalue(),expected)
+        request=Request('GET',{'Range':'bytes=20-'});self.store.video(request,self.id);self.assertEqual(request.code,416)
+        with self.assertRaisesRegex(ValueError,'interrupted'):self.store.video(Request('POST',{'Content-Type':'video/mp4','Content-Length':'10'},b'123'),self.id)
+        self.assertEqual((self.store.folder(self.id)/'source-video').read_bytes(),b'0123456789')
+    def test_server_restart_closes_an_interrupted_stage_timer(self):
+        import time
+        from face_pipeline import atomic
+        path=self.store.folder(self.id)
+        atomic(path/'status.json',{'status':'running'})
+        atomic(path/'timing.json',{'status':'running','requestedAt':time.time()-10,'activeStage':'cameras','stageStartedAt':time.time()-8,'stages':[]})
+        timing=FaceStore(self.store.root).timing(self.id)['timing']
+        self.assertEqual(timing['status'],'failed');self.assertNotIn('activeStage',timing);self.assertEqual(timing['stages'][0]['stage'],'cameras');self.assertGreaterEqual(timing['reconstructionSeconds'],10)
     def test_path_traversal_and_oversized_batch_rejected(self):
         with self.assertRaises(ValueError):self.store.folder('../secrets')
         with self.assertRaises(ValueError):self.store.append(self.id,[frame()]*7)

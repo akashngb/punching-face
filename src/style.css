@@ -10,3 +10,5 @@
 /* Keep the view controls below the crown instead of covering the hair. */
 .view-switch{top:auto;bottom:76px}
 #face-scan-video-file,#face-scan-photos{display:none}
+
+.pipeline-timing{margin:18px 0;padding:16px;background:#e7ecdf;border:1px solid #d0d9c5;border-radius:9px}.pipeline-timing h2{margin-bottom:4px}.pipeline-timing dl{display:grid;grid-template-columns:1fr auto;gap:7px 20px;font-size:12px}.pipeline-timing dd{margin:0;font-variant-numeric:tabular-nums}.pipeline-timing dt:last-of-type,.pipeline-timing dd:last-child{border-top:1px solid #cad3c0;padding-top:9px;font-weight:650}.pipeline-timing video{width:100%;max-height:230px;background:#172120;border-radius:5px}.pipeline-timing [hidden]{display:none}

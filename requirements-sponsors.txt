@@ -1,0 +1,5 @@
+# Optional: Sentry for the Python services (Sentry sponsor track). Safe to omit; sponsor_obs.py no-ops without it.
+# Install into BOTH environments:  .venv/bin/pip install -r requirements-sponsors.txt  &&  .local/newton-env/bin/pip install -r requirements-sponsors.txt
+sentry-sdk>=2.35,<3
+# urllib3 v2 warns on every import under the system Python 3.9 (LibreSSL); v1.26 is fully supported by sentry-sdk.
+urllib3<2; python_version<"3.10"

@@ -8,14 +8,21 @@
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
     "test:reconstruction": ".venv/bin/python tests/reconstruction_test.py",
-    "fixtures": ".venv/bin/python scripts/make_fixture.py"
+    "fixtures": ".venv/bin/python scripts/make_fixture.py",
+    "sponsors": ".venv/bin/python sponsor_server.py",
+    "livekit:dev": "livekit-server --dev --bind 127.0.0.1",
+    "build:guest": "vite build --config vite.guest.config.js",
+    "test:sponsors": ".venv/bin/python tests/sponsor_server_test.py && .venv/bin/python tests/sponsor_obs_test.py"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "0.10.32",
+    "@sentry/browser": "^10.75.0",
     "@sparkjsdev/spark": "2.2.0",
     "@tensorflow-models/body-segmentation": "^1.0.2",
     "@tensorflow/tfjs": "^4.22.0",
+    "livekit-client": "^2.22.3",
     "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4",
     "three": "0.180.0"
   },
   "devDependencies": {

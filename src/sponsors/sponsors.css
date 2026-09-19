@@ -1,0 +1,34 @@
+/* Sponsor dock. Uses the app's own variables (--line, --muted, --green, --accent) so it reads as part of CONTACT. */
+#sponsor-dock{position:fixed;right:14px;bottom:14px;z-index:40;width:330px;max-width:calc(100vw - 28px);font-size:12px;color:#222923}
+#sponsor-dock .sd-pill{display:flex;align-items:center;gap:8px;margin-left:auto;background:#fbfcf8;box-shadow:0 5px 25px #0002;font-family:'Space Grotesk',sans-serif;font-weight:600}
+#sponsor-dock .sd-dot{width:8px;height:8px;border-radius:50%;background:#b9c2b3;flex:none}
+#sponsor-dock .sd-dot.on{background:#3f9a5f}#sponsor-dock .sd-dot.live{background:#d24b3a;animation:sd-pulse 1.2s infinite}#sponsor-dock .sd-dot.warn{background:#d9a441}
+@keyframes sd-pulse{50%{opacity:.35}}
+#sponsor-dock .sd-body{margin-top:8px;background:#fbfcf8;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 40px #0003;overflow:hidden}
+#sponsor-dock.collapsed .sd-body{display:none}
+#sponsor-dock .sd-tabs{display:flex;border-bottom:1px solid var(--line);background:#f1f4ec}
+#sponsor-dock .sd-tabs button{flex:1;border:0;border-radius:0;background:none;padding:10px 8px;font-family:'Space Grotesk',sans-serif;font-weight:600;color:var(--muted)}
+#sponsor-dock .sd-tabs button.active{color:var(--green);box-shadow:inset 0 -2px var(--green);background:#fbfcf8}
+#sponsor-dock section{padding:12px;display:none;max-height:min(62vh,520px);overflow:auto}#sponsor-dock section.active{display:block}
+#sponsor-dock .sd-row{display:flex;gap:6px;align-items:center;margin-top:8px}#sponsor-dock .sd-row>*{min-width:0}
+#sponsor-dock input[type=text],#sponsor-dock input[type=password]{flex:1;border:1px solid var(--line);border-radius:7px;padding:8px 9px;background:#fff}
+#sponsor-dock button.primary{background:var(--green);border-color:var(--green);color:#f4f8ee}#sponsor-dock button.primary:hover{background:#1f4f3b}
+#sponsor-dock button.danger{background:#fbecea;border-color:#e6bdb6;color:#8a2f22}
+#sponsor-dock .sd-status{margin-top:8px;color:var(--muted);line-height:1.45;min-height:1.45em}
+#sponsor-dock .sd-status.error{color:#a23b2c}
+#sponsor-dock .sd-badge{display:inline-block;padding:2px 6px;border-radius:5px;background:var(--accent);color:#2c4a1d;font-size:10px;font-weight:700;letter-spacing:.04em}
+#sponsor-dock .sd-badge.mock{background:#f6dfa6;color:#6a4b07}#sponsor-dock .sd-badge.leaving{background:#fbdcd6;color:#8a2f22}
+#sponsor-dock .sd-log{margin-top:8px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:8px;height:112px;overflow:auto;line-height:1.5}
+#sponsor-dock .sd-log p{margin:0 0 6px}#sponsor-dock .sd-log .you{color:var(--muted)}#sponsor-dock .sd-log .coach{color:#1d3a2c}
+#sponsor-dock label.sd-check{display:flex;gap:7px;align-items:flex-start;margin-top:7px;line-height:1.35;color:#38463b}
+#sponsor-dock details{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}#sponsor-dock summary{cursor:pointer;color:var(--muted)}
+#sponsor-dock .sd-meter{height:4px;border-radius:2px;background:#e3e8dc;overflow:hidden;margin-top:8px}#sponsor-dock .sd-meter i{display:block;height:100%;width:0;background:var(--green);transition:width .08s}
+#sponsor-dock .sd-meter.open i{background:#d24b3a}
+#sponsor-dock .sd-invite{display:flex;gap:10px;margin-top:10px;align-items:flex-start}#sponsor-dock .sd-invite canvas{border:1px solid var(--line);border-radius:6px;flex:none}
+#sponsor-dock .sd-invite code{display:block;word-break:break-all;font-size:10px;color:var(--muted);max-height:54px;overflow:hidden}
+#sponsor-dock .sd-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+#sponsor-dock .sd-tile{position:relative;aspect-ratio:4/3;background:#1b2420;border-radius:7px;overflow:hidden;color:#dfe8d6}
+#sponsor-dock .sd-tile video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#sponsor-dock .sd-tile span{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;font-size:10px;background:#0009;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sponsor-dock .sd-tile.hit{outline:2px solid var(--accent)}
+#sponsor-dock table{width:100%;border-collapse:collapse;margin-top:10px}#sponsor-dock td{padding:3px 0;border-top:1px solid var(--line)}#sponsor-dock td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}

@@ -39,3 +39,10 @@ test('an invalid atlas fails before reading beyond the source surface',()=>{
   const {g,atlas}=fixture();atlas.mapping[0]=-1;
   assert.throws(()=>new SurfaceAppearance(g,atlas,new THREE.Texture()),/does not match/);g.dispose();
 });
+test('eye roughness uses a linear material map and is released with the surface',()=>{
+  const {g,atlas}=fixture();atlas.stats={material:'lit'};
+  const roughness=new THREE.Texture();roughness.colorSpace=THREE.SRGBColorSpace;let disposed=false;roughness.addEventListener('dispose',()=>disposed=true);
+  const surface=new SurfaceAppearance(g,atlas,new THREE.Texture(),roughness);
+  assert.equal(surface.material.roughnessMap,roughness);assert.equal(surface.material.roughness,1);assert.equal(roughness.colorSpace,THREE.NoColorSpace);
+  surface.dispose();assert.ok(disposed);g.dispose();
+});

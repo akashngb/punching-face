@@ -3,7 +3,7 @@ import * as THREE from 'three';
 // UV seams duplicate render vertices only. Physics remains on the welded source
 // surface; every render copy receives exactly the same simulated displacement.
 export class SurfaceAppearance extends THREE.Mesh {
-  constructor(source,atlas,texture){
+  constructor(source,atlas,texture,roughnessTexture=null){
     const count=source.attributes.position.count;
     if(!atlas.mapping?.length||atlas.mapping.some(i=>!Number.isInteger(i)||i<0||i>=count)||atlas.uv?.length!==atlas.mapping.length*2||!atlas.uv.every(Number.isFinite)||!atlas.indices?.length||atlas.indices.length%3||atlas.indices.some(i=>!Number.isInteger(i)||i<0||i>=atlas.mapping.length))throw new Error('Texture atlas does not match the simulated surface.');
     const geometry=new THREE.BufferGeometry(),mapping=new Uint32Array(atlas.mapping);
@@ -13,6 +13,7 @@ export class SurfaceAppearance extends THREE.Mesh {
     const physical=atlas.stats?.material==='physical-photo',lit=physical||atlas.stats?.material==='lit';
     texture.anisotropy=8;
     super(geometry,physical?new THREE.MeshPhysicalMaterial({map:texture,bumpMap:texture,bumpScale:.00009,color:0xbebebe,roughness:.67,specularIntensity:.22,metalness:0,side:THREE.DoubleSide}):lit?new THREE.MeshStandardMaterial({map:texture,color:0xbebebe,roughness:.78,metalness:0,side:THREE.DoubleSide}):new THREE.MeshBasicMaterial({map:texture,side:THREE.DoubleSide,toneMapped:false}));
+    if(lit&&roughnessTexture){roughnessTexture.colorSpace=THREE.NoColorSpace;roughnessTexture.anisotropy=8;this.material.roughnessMap=roughnessTexture;this.material.roughness=1;}
     this.name='Textured editable surface';this.mapping=mapping;this.atlas=atlas;this.frustumCulled=false;
     this.updateSurface(source.attributes.position.array,source.attributes.normal.array);
     geometry.setAttribute('restNormal',geometry.attributes.normal.clone());
@@ -34,7 +35,7 @@ export class SurfaceAppearance extends THREE.Mesh {
     const g=this.geometry.clone();g.setAttribute('position',new THREE.BufferAttribute(this.remap(rest),3));
     g.morphAttributes.position=morphs.map(m=>{const a=new THREE.BufferAttribute(this.remap(m.array),3);a.name=m.name;return a;});g.morphTargetsRelative=true;g.computeVertexNormals();return g;
   }
-  dispose(){this.removeFromParent();this.geometry.dispose();this.material.map?.dispose();this.material.dispose();}
+  dispose(){this.removeFromParent();this.geometry.dispose();this.material.map?.dispose();this.material.roughnessMap?.dispose();this.material.dispose();}
 }
 
 // glTF stores separate vertices across UV seams. Restore a welded simulation

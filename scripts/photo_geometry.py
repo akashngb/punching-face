@@ -1,6 +1,7 @@
 """Photo-derived face geometry and texture. No radiance-field reconstruction."""
 from pathlib import Path
 import json
+import hashlib
 import numpy as np
 import trimesh,xatlas
 from PIL import Image
@@ -10,6 +11,8 @@ from scipy.ndimage import distance_transform_edt,map_coordinates
 from face_pipeline import atomic
 from scripts.head_material import rear_reference,missing_head_material
 from scripts.head_accessories import clean_view,build_glasses
+from scripts.eye_detail import apply_eye_material
+from scripts.photo_detail import prepare_detail_frames,detail_image
 import cv2
 ROOT=Path(__file__).resolve().parents[1]
 OVAL=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109]
@@ -139,18 +142,21 @@ def project_eyewear_mask(glasses,cam,pose,center,B,transform,head_depth):
                     cv2.circle(mask,(int(x),int(y)),min(radius,25),255,-1)
     return cv2.dilate(mask,np.ones((5,5),np.uint8))
 
-def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,completion=None):
+def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,completion=None,eyes=None):
+    detail_audit=prepare_detail_frames(folder)
     head_capture=json.loads((folder/'capture.json').read_text()).get('captureRegion')=='head'
     size=3072;m=trimesh.Trimesh(p,f,process=False);normal=np.array(m.vertex_normals)
     atlas=xatlas.Atlas();atlas.add_mesh(p.astype(np.float32),f.astype(np.uint32));pack=xatlas.PackOptions();pack.resolution=size;pack.padding=4;atlas.generate(pack_options=pack);mapping,indices,uv=atlas[0]
     face_keys={tuple(sorted(face)) for face in f[:face_count]};is_face=np.array([tuple(sorted(face)) in face_keys for face in mapping[indices]])
-    texel,tn,observed,covered,parts=raster_atlas(p,normal,mapping,indices,uv,is_face,size,eye_parts(p,f))
+    eye_labels=eye_parts(p,f)
+    texel,tn,observed,covered,parts=raster_atlas(p,normal,mapping,indices,uv,is_face,size,eye_labels)
     world=(texel/transform['scale']+transform['center'])@B+center;world_n=tn@B;verts_world=(p/transform['scale']+transform['center'])@B+center
     # Neutral shading identifies the inferred cranium instead of inventing a
     # hair/scalp texture for regions the camera never captured.
     light=np.array([-.3,.7,1.]);light/=np.linalg.norm(light);shade=.6+.4*np.maximum(tn@light,0)
     color=np.array([.31,.38,.36])[None]*shade[:,None];best=np.zeros(len(texel));total=np.zeros(len(texel));accum=np.zeros_like(color);visible_any=np.zeros(len(texel),bool)
     estimated_total=np.zeros(len(texel));estimated_color=np.zeros_like(color);mask_audit=[]
+    detail_best=np.zeros(len(texel));fine_detail=np.zeros_like(color)
     yaw=lambda im:frames[im.name].get('cameraYaw',frames[im.name].get('yaw') or 0)
     facial=[im for im in train if frames[im.name].get('landmarks')]
     front=min(facial,key=lambda im:abs(yaw(im)))
@@ -177,11 +183,16 @@ def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,c
     glasses=build_glasses(p,completion,rec,frames,center,B,transform) if completion else None
     for im in [im for im in train if im.name in selected]:
         cam=rec.cameras[im.camera_id];pose=im.cam_from_world();R=pose.rotation.matrix();translation=pose.translation;cp=world@R.T+translation;xy=cam.img_from_cam(cp);ij=np.floor(np.nan_to_num(xy,nan=-1,posinf=-1,neginf=-1)).astype(int)
-        raw=np.asarray(Image.open(folder/'images'/im.name).convert('RGBA'));h,w=raw.shape[:2]
+        h,w=cam.height,cam.width
+        raw=detail_image(folder,im.name);pixel_scale=raw.shape[1]/w
         vertex_cp=verts_world@R.T+translation;depth=zbuffer(cam.img_from_cam(vertex_cp),vertex_cp[:,2],f,w,h)
         projected_mask=project_eyewear_mask(glasses,cam,pose,center,B,transform,depth)
-        pixels,accessory_mask,audit=clean_view(raw,im.name,completion,frames[im.name],frames,return_details=True,projected_mask=projected_mask)
-        mask_audit.append({'filename':im.name,**audit});h,w=pixels.shape[:2];inside=(ij[:,0]>=0)&(ij[:,0]<w-1)&(ij[:,1]>=0)&(ij[:,1]<h-1)&(cp[:,2]>0)&(observed|head_capture)
+        detail_completion=completion
+        if pixel_scale!=1 and completion:
+            detail_completion={**completion,'crops':{name:(np.asarray(crop)*pixel_scale).tolist() for name,crop in completion['crops'].items()}}
+        if projected_mask is not None:projected_mask=cv2.resize(projected_mask,(raw.shape[1],raw.shape[0]),interpolation=cv2.INTER_NEAREST)
+        pixels,accessory_mask,audit=clean_view(raw,im.name,detail_completion,frames[im.name],frames,return_details=True,projected_mask=projected_mask)
+        mask_audit.append({'filename':im.name,**audit});inside=(ij[:,0]>=0)&(ij[:,0]<w-1)&(ij[:,1]>=0)&(ij[:,1]<h-1)&(cp[:,2]>0)&(observed|head_capture)
         ij[:,0]=np.clip(ij[:,0],0,w-1);ij[:,1]=np.clip(ij[:,1],0,h-1);x,y=ij.T
         visible=np.abs(cp[:,2]-depth[y,x])*transform['scale']<.006
         toward=im.projection_center()-world;toward/=np.maximum(np.linalg.norm(toward,axis=1,keepdims=True),1e-9);facing=np.maximum(np.sum(world_n*toward,axis=1),0)
@@ -190,25 +201,34 @@ def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,c
         # Segmentation leaves a pale fringe at some neck/hair cutouts. Fade
         # projections before the cutout boundary so it cannot become a sharp
         # diagonal stripe when another view or the inferred material takes over.
-        boundary_distance=distance_transform_edt(pixels[:,:,3]>128)
+        base_alpha=cv2.resize(pixels[:,:,3],(w,h),interpolation=cv2.INTER_NEAREST)
+        boundary_distance=distance_transform_edt(base_alpha>128)
         edge_weight=np.clip(boundary_distance[y,x]/10.,0,1)
         edge_weight=edge_weight*edge_weight*(3-2*edge_weight)
-        quality=facing**8*inside*visible*(pixels[y,x,3]/255)*preference*edge_weight
-        sample_xy=np.nan_to_num(xy,nan=-1,posinf=-1,neginf=-1)
+        quality=facing**8*inside*visible*(base_alpha[y,x]/255)*preference*edge_weight
+        sample_xy=np.nan_to_num(xy,nan=-1,posinf=-1,neginf=-1)*pixel_scale
         rgb=np.stack([map_coordinates(pixels[:,:,c].astype(float),[sample_xy[:,1]-.5,sample_xy[:,0]-.5],order=1,mode='nearest') for c in range(3)],axis=1)/255.
+        # Blend exposure at low frequencies; retain fine hairs from one clear
+        # camera instead of averaging misaligned eyebrow/beard/lock edges.
+        smooth=cv2.GaussianBlur(pixels[:,:,:3].astype(np.float32)/255,(0,0),1.4*pixel_scale)
+        low_rgb=np.stack([map_coordinates(smooth[:,:,c],[sample_xy[:,1]-.5,sample_xy[:,0]-.5],order=1,mode='nearest') for c in range(3)],axis=1)
         # Reject the bright cutout fringe without removing legitimate skin.
         fringe=(rgb.min(axis=1)>.76)&(np.ptp(rgb,axis=1)<.10);quality*=~((~observed)&fringe)
         median=cheek_color(im)
-        if median is not None:rgb*=np.clip(reference_color/np.maximum(median,.05),.8,1.25)
-        masked=accessory_mask[y,x]>0
+        if median is not None:
+            correction=np.clip(reference_color/np.maximum(median,.05),.8,1.25)
+            rgb*=correction;low_rgb*=correction
+        masked=cv2.resize(accessory_mask,(w,h),interpolation=cv2.INTER_NEAREST)[y,x]>0
         # Clean unoccluded photographs always win. Only use estimated fills
         # when no camera can see the skin behind the accessory.
         # The small opaque frame fill replaces only those pixels. Lenses,
         # eyes and brows retain their observed photo appearance.
         estimate=quality*masked;estimated_total+=estimate;estimated_color+=rgb*estimate[:,None]
-        best=np.maximum(best,quality);total+=quality;accum+=rgb*quality[:,None]
+        quality*=~masked
+        take=quality>detail_best;fine_detail[take]=(rgb-low_rgb)[take];detail_best=np.maximum(detail_best,quality)
+        best=np.maximum(best,quality);total+=quality;accum+=low_rgb*quality[:,None]
         print('Projected capture',im.name,flush=True)
-    supported=total>1e-7;color[supported]=accum[supported]/total[supported,None]
+    supported=total>1e-7;color[supported]=accum[supported]/total[supported,None]+fine_detail[supported]
     occluded=(total<.00001)&(estimated_total>1e-7)
     color[occluded]=estimated_color[occluded]/estimated_total[occluded,None]
     rear_path=folder/'rear-prediction/rear.png'
@@ -235,7 +255,7 @@ def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,c
     # A complete template contains hidden mouth surfaces and the backs of the
     # eyeballs. Those are not failed facial photographs. Measure coverage on
     # the exposed surface and give hidden internal anatomy a neutral material.
-    exposed=observed&visible_any;interior=observed&~visible_any
+    exposed=observed&visible_any&(parts==0);interior=observed&~visible_any&(parts==0)
     color[interior]=reference_color*.65
     mouth=interior&(texel[:,1]<p[13,1]+.006)&(texel[:,1]>p[152,1]+.01)&(np.abs(texel[:,0])<.045)
     color[mouth]=np.array([.14,.055,.045])
@@ -244,13 +264,29 @@ def bake_photographs(folder,p,f,face_count,rec,frames,train,center,B,transform,c
     if low>.12:raise ValueError(f'Photographic coverage is insufficient for {low:.0%} of the face surface.')
     if np.any(missing):
         supported=exposed&~missing;_,closest=cKDTree(texel[supported]).query(texel[missing]);color[missing]=color[supported][closest]
-    estimated_eye=np.zeros(len(texel),bool)
+    eye_texels=0
+    if eyes:color,eye_texels=apply_eye_material(folder,texel,parts,p,eye_labels,color,eyes)
+    estimated_eye=(parts>0) if eyes else np.zeros(len(texel),bool)
     texture=np.zeros((size,size,3),np.uint8);texture[covered]=np.uint8(np.clip(color,0,1)*255);_,nearest=distance_transform_edt(~covered,return_indices=True);texture[~covered]=texture[nearest[0][~covered],nearest[1][~covered]]
     Image.fromarray(texture[::-1]).save(folder/'appearance.png')
+    if eyes:
+        rough=np.full((size,size),199,np.uint8);rough[covered]=np.where(parts>0,51,199)
+        rough[~covered]=rough[nearest[0][~covered],nearest[1][~covered]]
+        Image.fromarray(rough[::-1]).convert('RGB').save(folder/'appearance-roughness.png')
     # An explicit audit prevents detection alone being reported as successful
     # cleanup. Retain which views were masked, propagated or excluded.
-    atomic(folder/'eyewear-mask-audit.json',{'views':mask_audit,'estimatedFaceTexels':int(np.count_nonzero(occluded&exposed)),'estimatedEyeTexels':int(estimated_eye.sum()),'lensInteriorsExcluded':False,'opaqueFramePixelsReplaced':True,'limitation':'Observed eyes and skin through clear lenses are retained. Lens tint/reflections may remain; a glasses-free reference is needed for verified clean hidden skin.'})
+    atomic(folder/'eyewear-mask-audit.json',{'views':mask_audit,'estimatedFaceTexels':int(np.count_nonzero(occluded&exposed)),'estimatedEyeTexels':int(estimated_eye.sum()),'lensInteriorsExcluded':False,'opaqueFramePixelsReplaced':True,'eyeDetail':eyes['summary'] if eyes else 'Unverified photographic projection','limitation':'Skin through clear lenses is retained, so lens tint/reflections may remain. Eyeballs use the separately audited eye material; a glasses-free reference is needed for verified clean hidden skin.'})
     metadata={'mapping':mapping.tolist(),'indices':indices.ravel().tolist(),'uv':uv.ravel().tolist(),'texture':f'/api/face-asset?id={folder.name}&asset=appearance.png','stats':{'textureSize':size,'sourceViews':len(selected),'lowConfidenceFraction':low,'hairTextureFromPhotos':head_capture,'rearAppearance':('Captured rear photographs with inferred gaps' if any(abs(yaw(im))>115 for im in train) else ('AI-predicted rear reference' if rear_path.exists() else ('Photographic material continuation' if head_capture else 'Unobserved gray'))),'photographedCapFraction':float(np.mean(best[~observed]>.001)),'material':'lit','astraCompletion':bool(completion),'eyewearRemovedFromSkin':bool(completion and completion['glasses']['present']),'crownMapping':'Cartesian triplanar photo swatch; no spherical pole','method':'Photographic face and hair with frontal feature ownership. Narrow opaque rim cleanup preserves observed eyes and brows; separate glasses retain their own material. Missing rear appearance is labeled estimated.'}}
     metadata['stats'].update(material='lit',eyewearRemovedFromSkin=False,opaqueFrameCleanupApplied=any(a['excludedPixels']>0 for a in mask_audit),eyewearMaskedViews=sum(a['excludedPixels']>0 for a in mask_audit),eyewearSkippedViews=sum(a['method']=='unverified-view-excluded' for a in mask_audit),estimatedOccludedFaceFraction=float(np.mean(occluded[exposed])),lensInteriorsExcluded=False,skinDetail='3072px photographic color; observed eyes, eyebrows and hair preserved')
-    metadata['stats']['eyes']='Original photographic eyes and eyebrows preserved; no generated eye or brow texture'
+    metadata['stats']['eyes']=eyes['summary'] if eyes else 'Legacy photographic projection; eye detail has not been quality checked.'
+    metadata['stats']['eyeMaterialTexels']=eye_texels
+    metadata['stats']['nativeVideoDetailViews']=len(detail_audit['frames'])
+    metadata['stats']['fineDetail']='Native video pixels; a single visible camera owns fine eyebrow, beard and hair texture; only broad color is blended.'
+    metadata['stats']['material']='photo'
+    metadata['stats']['colour']='Captured browser-decoded video colour and lighting retained; no additional studio relighting at rest.'
+    metadata['textureSha256']=hashlib.sha256((folder/'appearance.png').read_bytes()).hexdigest()
+    metadata['positionsSha256']=hashlib.sha256(np.asarray(p,dtype='<f4').tobytes()).hexdigest()
+    if eyes:metadata['roughnessTexture']=f'/api/face-asset?id={folder.name}&asset=appearance-roughness.png'
+    metadata['stats']['skinDetail']='3072px photographic skin, eyebrows and hair; eyeballs receive separate quality-checked iris material.' if eyes else metadata['stats']['skinDetail']
+    metadata['stats']['method']='Photographic skin and hair with separate eye materials and 3D glasses. Missing eye detail is explicitly labeled estimated.' if eyes else metadata['stats']['method']
     atomic(folder/'texture-atlas.json',metadata);return metadata['stats']

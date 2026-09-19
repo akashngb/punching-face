@@ -72,7 +72,7 @@ def fit_hair_envelope(folder,vertices,faces,face_count,rec,frames,train,center,B
 
 
 def fit_template_hair(folder,vertices,faces,face_count,rec,frames,views,center,B,transform):
-    """Preserve the template skull and fit a smooth outer hair envelope only."""
+    """Fit the photographed asymmetric envelope without smoothing away locks."""
     from scipy.sparse import csr_matrix
     p=vertices.copy();coarse=vertices[:468];hairline=coarse[10,1];crown=[]
     for im in views:
@@ -85,18 +85,37 @@ def fit_template_hair(folder,vertices,faces,face_count,rec,frames,views,center,B
     upper=p[:,1]>hairline
     p[upper,1]=hairline+(p[upper,1]-hairline)*(target_top-hairline)/(p[:,1].max()-hairline)
     origin=np.array([0,.025,-.09]);angle=np.abs(np.arctan2(p[:,0],p[:,2]-origin[2]));threshold=np.interp(angle,[0,1,1.7,np.pi],[hairline,.065,.06,-.035])
-    weight=np.clip((p[:,1]-threshold)/.025,0,1);weight[:468]=0;ids=np.where(weight>.001)[0]
+    weight=np.clip((p[:,1]-threshold)/.018,0,1);weight[:468]=0
+    weight[np.unique(faces[:face_count])]=0;ids=np.where(weight>.001)[0]
     selected={min(views,key=lambda im:abs(((frames[im.name].get('cameraYaw',frames[im.name].get('yaw') or 0)-angle+180)%360)-180)).name for angle in np.arange(-180,180,30)}
-    ray=p[ids]-origin;samples=np.linspace(.88,1.15,25);candidates=origin+ray[:,None]*samples[None,:,None];world=(candidates.reshape(-1,3)/transform['scale'])@B+center;constraints=[]
+    ray=p[ids]-origin;samples=np.linspace(.45,1.48,181);candidates=origin+ray[:,None]*samples[None,:,None];world=(candidates.reshape(-1,3)/transform['scale'])@B+center;constraints=[]
     for im in views:
         if im.name not in selected:continue
         mask=np.asarray(Image.open(folder/'images'/im.name).getchannel('A'))>200;signed=gaussian_filter(distance_transform_edt(mask)-distance_transform_edt(~mask),1)
         cam=rec.cameras[im.camera_id];pose=im.cam_from_world();cp=world@pose.rotation.matrix().T+pose.translation;xy=cam.img_from_cam(cp);ij=np.rint(np.nan_to_num(xy,nan=-1)).astype(int);h,w=mask.shape
         inside=(ij[:,0]>=0)&(ij[:,0]<w)&(ij[:,1]>=0)&(ij[:,1]<h)&(cp[:,2]>0);ij[:,0]=np.clip(ij[:,0],0,w-1);ij[:,1]=np.clip(ij[:,1],0,h-1)
         constraints.append(np.where(inside,signed[ij[:,1],ij[:,0]],-1000).reshape(len(ids),len(samples)))
-    supported=np.quantile(np.stack(constraints),.15,axis=0)>-2.;last=np.max(np.where(supported,np.arange(len(samples))[None],-1),axis=1);scale=np.where(last>=0,samples[np.maximum(last,0)],1.)
+    distances=np.quantile(np.stack(constraints),.05,axis=0)
+    supported=distances>-.5;last=np.max(np.where(supported,np.arange(len(samples))[None],-1),axis=1)
+    # A ray with no feasible sample must minimize its violation; keeping the
+    # original inflated cap was adding hair outside the photographed outline.
+    best=np.argmax(distances,axis=1)
+    scale=samples[np.where(last>=0,last,best)]
     delta=np.zeros_like(p);delta[ids]=ray*(scale[:,None]-1)*weight[ids,None]
     edges=np.vstack([faces[:,[0,1]],faces[:,[1,2]],faces[:,[2,0]]]);edges=np.unique(np.sort(edges,axis=1),axis=0);rows=np.r_[edges[:,0],edges[:,1]];cols=np.r_[edges[:,1],edges[:,0]];degree=np.bincount(rows,minlength=len(p));average=csr_matrix((1/degree[rows],(rows,cols)),shape=(len(p),len(p)))
-    for _ in range(25):delta=(delta*.3+(average@delta)*.7)*weight[:,None]
-    p+=delta;p[:468]=coarse
-    return p,{'method':'Smooth hair envelope fitted on the full head template; skull, ears and neck retained.','crownAboveHairlineMm':round((target_top-hairline)*1000,2),'silhouetteViews':len(selected),'maximumHairAdjustmentMm':float(np.linalg.norm(p-vertices,axis=1).max()*1000),'limitation':'Outer hair volume, not individual strands. Unseen surfaces retain template geometry.'}
+    # Keep a data term at every iteration. Repeated unanchored averaging plus
+    # multiplying by the hairline weight previously erased the quiff/taper.
+    target=delta.copy()
+    for _ in range(6):delta=target*.72+(average@delta)*.28
+    delta[weight==0]=0
+    p+=delta
+    # Radial silhouette expansion also raises Y. With a ground-level orbit,
+    # the unseen middle of the crown can grow into a cone inside all silhouettes.
+    # Reapply the measured crown-height bound AFTER expansion, with a smooth
+    # rounded upper envelope and a gradual taper behind the front quiff.
+    ceiling=target_top-.010*(p[:,0]/.12)**2-.018*(np.clip(-p[:,2]-.07,0,None)/.16)**2
+    active=weight>0
+    y=p[active,1];bound=ceiling[active]
+    p[active,1]=(y+bound-np.sqrt((y-bound)**2+.004**2))*.5
+    p[:468]=coarse;p[np.unique(faces[:face_count])]=vertices[np.unique(faces[:face_count])]
+    return p,{'method':'Multiview silhouette fit with a post-fit crown-height bound; measured face pinned.','crownAboveHairlineMm':round((target_top-hairline)*1000,2),'actualCrownAboveHairlineMm':round((p[:,1].max()-hairline)*1000,2),'silhouetteViews':len(selected),'maximumHairAdjustmentMm':float(np.linalg.norm(p-vertices,axis=1).max()*1000),'limitation':'Outer hair volume is silhouette-constrained. Interior roots and unseen concavities remain estimates.'}

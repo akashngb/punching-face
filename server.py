@@ -25,7 +25,7 @@ LOCK = threading.Lock()
 ARM_LOCK = threading.Lock()
 CAPTURES = ROOT / '.local' / 'arm-captures'
 FACE_STORE = FaceStore(gpu_lock=ARM_LOCK)
-FACE_ROUTES = {'/api/face-captures','/api/face-frames','/api/face-train','/api/face-status','/api/face-asset','/api/face-delete','/api/openai-config','/api/openai-test'}
+FACE_ROUTES = {'/api/face-captures','/api/face-frames','/api/face-train','/api/face-status','/api/face-asset','/api/face-delete','/api/face-timing','/api/face-video','/api/openai-config','/api/openai-test'}
 
 def run_arm(folder):
     try:
@@ -157,7 +157,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 kind = parse_qs(url.query).get("type", ["json"])[0]
                 size = int(self.headers.get("Content-Length", "0"))
-                if kind not in ("json", "glb") or not 0 < size <= 60_000_000:
+                # Full strand geometry plus portable color/roughness atlases
+                # can exceed the old 60 MB portrait-only export ceiling.
+                if kind not in ("json", "glb") or not 0 < size <= 180_000_000:
                     return self.reply(413, {"error":"Unsupported export or file too large."})
                 body = self.rfile.read(size)
                 if kind == "json":
@@ -233,4 +235,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM,shutdown_server)
     signal.signal(signal.SIGINT,shutdown_server)
     print("Local reconstruction: http://127.0.0.1:5174", flush=True)
+    # Optional Sentry tracing (SPONSOR_SETUP.md): continues the browser's trace. A no-op without a DSN.
+    try:import sponsor_obs;sponsor_obs.init('contact-api');sponsor_obs.instrument_http(Handler)
+    except ImportError:pass
     ThreadingHTTPServer(("127.0.0.1", 5174), Handler).serve_forever()

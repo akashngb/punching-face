@@ -6,6 +6,13 @@ evidence tags and recipes are in [OPEN_SOURCE_STACK.md](OPEN_SOURCE_STACK.md). R
 
 ## Where things are
 
+- `SPONSOR_TRACKS.md`: the Hack the North plan (OpenAI, Huawei OMNI Live, Sentry), with tasks mapped to files here.
+  New sponsor work goes in **new files** with one-line hooks; do not restructure `src/main.js` or `server.py` for it.
+- `SPONSOR_SETUP.md`: how to run the OMNI coach, the LiveKit arena and Sentry (`npm run sponsors`, `npm run livekit:dev`).
+  Their code lives in `src/sponsors/`, `sponsor_server.py`, `sponsor_obs.py`, `guest.html`.
+  **Keep these hooks when editing:** the second `<script>` in `index.html`; the `window.__contactLab.remotePunch` block at
+  the end of `src/main.js`; the `sponsor_obs` lines in `server.py`, `physics_server.py`, `face_pipeline.py` and
+  `scripts/build_photo_face.py`. `tests/sponsors-hook.test.mjs` fails if one is lost: restore the hook, keep the test.
 - `OPEN_SOURCE_STACK.md`: which open-source projects fit each failing stage, what was verified, what is still a guess.
 - `.local/third_party/`: 17 pinned, permissively licensed sources (reference code and ungated model data).
   Recreate with `.venv/bin/python scripts/setup_third_party.py`; pins are in `scripts/third_party_manifest.json`.

@@ -56,7 +56,7 @@ self.onmessage=async({data})=>{
         if(previousThumbnail&&difference/(64*48)<1.4){self.postMessage({type:'frame',ok:false,message:'View already saved. Continue your slow rotation.'});return;}
         previousThumbnail=thumbnail;
         const blob=await canvas.convertToBlob({type:'image/png'});
-        self.postMessage({type:'frame',ok:true,yaw:quality.ok?quality.yaw:null,pitch:quality.ok?quality.pitch:null,landmarks:quality.ok?quality.landmarks:null,viewKind:quality.ok?'face':'head-only',blob});
+        self.postMessage({type:'frame',ok:true,yaw:quality.ok?quality.yaw:null,pitch:quality.ok?quality.pitch:null,landmarks:quality.ok?quality.landmarks:null,irisLandmarks:quality.ok?quality.irisLandmarks:null,viewKind:quality.ok?'face':'head-only',blob});
       }finally{data.bitmap.close();}
     }
   }catch(e){self.postMessage({type:'error',message:e.message});}

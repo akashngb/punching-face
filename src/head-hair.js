@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { photoStrandGeometry, validatePhotoCurves } from './photo-hair-strands.js';
 
 const clamp=THREE.MathUtils.clamp;
 const types=['straight','wavy','curly','coily','braided','locs'];
@@ -18,10 +19,22 @@ export class HeadHair extends THREE.Mesh {
     this.rebuild(source);
   }
   rebuild(source,overrides={}){
+    this.curveBinding=null;
     if(overrides.type&&overrides.type!==this.spec.parameters.type)this.spec.mode='editable-prior';
     const p={...this.spec.parameters,...overrides};this.spec.parameters=p;
-    const guides=this.spec.mode==='photo-detail'?this.spec.photoGuides:null;
+    const guides=['photo-detail','photo-strands'].includes(this.spec.mode)?this.spec.photoGuides:null;
     if(guides&&(!guides.directions?.every(Number.isFinite)||!guides.colors?.every(Number.isFinite)||!guides.confidence?.every(Number.isFinite)||guides.directions.length!==this.spec.rootTriangles.length||guides.colors.length!==guides.directions.length||guides.confidence.length*3!==guides.directions.length))throw new Error('Invalid photographic hair guides.');
+    if(this.spec.mode==='photo-strands'){
+      validatePhotoCurves(guides,this.spec.rootTriangles.length/3);
+      // The source colors already include illumination. Very weak added
+      // specularity avoids a silver sheen under the bright studio lights.
+      this.material.dispose();this.material=guides.observedOnly?new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,toneMapped:false}):new THREE.MeshPhysicalMaterial({vertexColors:true,color:0xaaaaaa,roughness:.9,metalness:0,specularIntensity:.0008,anisotropy:.8,anisotropyRotation:Math.PI/2,side:THREE.DoubleSide});
+      const result=photoStrandGeometry(source,this.spec,p);
+      this.geometry.dispose();this.geometry=result.geometry;this.roots=result.roots;this.strandCount=result.strandCount;
+      this.base=this.geometry.attributes.position.array.slice();this.baseNormals=this.geometry.attributes.normal.array.slice();
+      this.bindCurveStations(source);
+      this.lastRoots=new Float32Array(this.roots.length*6);this.lastRoots.fill(Infinity);return;
+    }
     if(guides&&!this.material.isMeshBasicMaterial){this.material.dispose();this.material=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide,toneMapped:false});}
     if(!guides&&this.material.isMeshBasicMaterial){this.material.dispose();this.material=new THREE.MeshPhysicalMaterial({vertexColors:true,roughness:.78,specularIntensity:.06,anisotropy:.5,side:THREE.DoubleSide});}
     const finite=(key,fallback,lo,hi)=>Number.isFinite(p[key])?clamp(p[key],lo,hi):fallback;
@@ -107,6 +120,7 @@ export class HeadHair extends THREE.Mesh {
     this.lastRoots=new Float32Array(this.roots.length*6);this.lastRoots.fill(Infinity);
   }
   updateSurface(source){
+    if(this.curveBinding)return this.updateCurveStations(source);
     const src=source.attributes.position.array,sn=source.attributes.normal.array,ids=this.spec.rootTriangles,weights=this.spec.rootWeights,out=this.geometry.attributes.position.array,on=this.geometry.attributes.normal.array;
     const root=new THREE.Vector3(),normal=new THREE.Vector3(),point=new THREE.Vector3(),q=new THREE.Quaternion();let changed=false;
     for(let i=0;i<this.roots.length;i++){
@@ -123,6 +137,40 @@ export class HeadHair extends THREE.Mesh {
     }
     if(changed){this.geometry.attributes.position.needsUpdate=true;this.geometry.attributes.normal.needsUpdate=true;}
   }
+  bindCurveStations(source){
+    this.curveBinding=null;
+    const binding=this.spec.photoGuides?.curveBindings;if(!binding)return;
+    const stations=this.spec.photoGuides.segments+1,expected=this.spec.rootCount*stations*3;
+    const ids=binding.triangles,w=binding.weights,n=source.attributes.position.count;
+    if(ids?.length!==expected||w?.length!==expected||ids.some(i=>!Number.isInteger(i)||i<0||i>=n)||w.some(v=>!Number.isFinite(v)||v<0||v>1))throw new Error('Invalid hair curve bindings.');
+    for(let i=0;i<w.length;i+=3)if(Math.abs(w[i]+w[i+1]+w[i+2]-1)>1e-4)throw new Error('Invalid hair curve weights.');
+    const count=this.roots.length*stations,rest=new Float32Array(count*6);
+    const p=source.attributes.position.array,sn=source.attributes.normal.array;
+    for(let i=0;i<count;i++){
+      for(let k=0;k<3;k++){const id=ids[i*3+k]*3,weight=w[i*3+k];for(let a=0;a<3;a++){rest[i*6+a]+=p[id+a]*weight;rest[i*6+a+3]+=sn[id+a]*weight;}}
+      const len=Math.hypot(...rest.subarray(i*6+3,i*6+6))||1;for(let a=3;a<6;a++)rest[i*6+a]/=len;
+    }
+    this.curveBinding={ids,w,stations,rest,last:new Float32Array(count*6).fill(Infinity),count};
+  }
+  updateCurveStations(source){
+    const {ids,w,stations,rest,last,count}=this.curveBinding,p=source.attributes.position.array,sn=source.attributes.normal.array;
+    const out=this.geometry.attributes.position.array,on=this.geometry.attributes.normal.array;
+    const root=new THREE.Vector3(),normal=new THREE.Vector3(),point=new THREE.Vector3(),baseRoot=new THREE.Vector3(),baseNormal=new THREE.Vector3(),q=new THREE.Quaternion();let changed=false;
+    for(let i=0;i<count;i++){
+      root.set(0,0,0);normal.set(0,0,0);
+      for(let k=0;k<3;k++){const id=ids[i*3+k]*3,weight=w[i*3+k];point.fromArray(p,id);root.addScaledVector(point,weight);point.fromArray(sn,id);normal.addScaledVector(point,weight);}
+      normal.normalize();const at=i*6;
+      if(Math.abs(root.x-last[at])<1e-6&&Math.abs(root.y-last[at+1])<1e-6&&Math.abs(root.z-last[at+2])<1e-6&&Math.abs(normal.x-last[at+3])<1e-6&&Math.abs(normal.y-last[at+4])<1e-6&&Math.abs(normal.z-last[at+5])<1e-6)continue;
+      root.toArray(last,at);normal.toArray(last,at+3);baseRoot.fromArray(rest,at);baseNormal.fromArray(rest,at+3);q.setFromUnitVectors(baseNormal,normal);
+      const group=this.roots[Math.floor(i/stations)],ring=i%stations;
+      for(let child=0;child<3;child++)for(let side=0;side<3;side++){
+        const vertex=(group.start+child*stations*3+ring*3+side)*3;
+        point.fromArray(this.base,vertex).sub(baseRoot).applyQuaternion(q).add(root).toArray(out,vertex);
+        point.fromArray(this.baseNormals,vertex).applyQuaternion(q).toArray(on,vertex);
+      }changed=true;
+    }
+    if(changed){this.geometry.attributes.position.needsUpdate=true;this.geometry.attributes.normal.needsUpdate=true;}
+  }
   dispose(){this.removeFromParent();this.geometry.dispose();this.material.dispose();}
 }
 
@@ -133,5 +181,6 @@ export function remapHairRoots(spec,oldPositions,newPositions){
   const key=(a,i)=>[a[i],a[i+1],a[i+2]].map(x=>Math.round(x/1e-7)).join(',');
   for(let i=0;i<newPositions.length;i+=3)lookup.set(key(newPositions,i),i/3);
   result.rootTriangles=result.rootTriangles.map(i=>{const mapped=lookup.get(key(oldPositions,i*3));if(mapped===undefined)throw new Error('Hair roots do not match the imported head.');return mapped;});
+  if(result.photoGuides?.curveBindings)result.photoGuides.curveBindings.triangles=result.photoGuides.curveBindings.triangles.map(i=>{const mapped=lookup.get(key(oldPositions,i*3));if(mapped===undefined)throw new Error('Hair curve points do not match the imported head.');return mapped;});
   result.sourceVertexCount=newPositions.length/3;return result;
 }
