@@ -2,7 +2,14 @@ import { createRoot } from 'react-dom/client';
 import { useEffect, useRef } from 'react';
 import { PlusCard } from '@/components/ui/ruixen-bento-cards';
 import { GridCard } from '@/components/ui/grid-card';
+import { AnimatedTabs } from '@/components/ui/animated-tabs';
 import '@/design/index.css';
+
+type PunchingFace = {
+  __punchingFace?: {
+    state?: { calibrated?: boolean; cameraActive?: boolean };
+  };
+};
 
 function AppShell() {
   const headerSlot = useRef<HTMLDivElement>(null);
@@ -36,18 +43,32 @@ function AppShell() {
       if (right && rightSlot.current) rightSlot.current.appendChild(right);
       dialogs.forEach((d) => document.body.appendChild(d));
 
+      // Punch detector: keep #slap-hud alive in the DOM (main.js still binds
+      // the media stream to #slap-preview and toggles .active on the hud),
+      // but hide it visually. Lift the hand-landmark SVG overlay out of the
+      // hud and drop it on top of the #webcam preview.
       const slapHud = document.getElementById('slap-hud');
-      if (slapHud && right) right.insertBefore(slapHud, right.firstChild);
+      const slapHand = document.getElementById('slap-view-hand');
+      const webcam = document.getElementById('webcam');
+      if (webcam && slapHand) {
+        const wrap = document.createElement('div');
+        wrap.className = 'camera-view';
+        webcam.parentElement?.insertBefore(wrap, webcam);
+        wrap.appendChild(webcam);
+        wrap.appendChild(slapHand);
+      }
+      if (slapHud) slapHud.style.display = 'none';
 
       moveKeyHintToLeftPanel(stageShell, left);
       wrapAdvancedSection(right);
       customizeContactResponse(right);
       bakeBeatMeButton();
-      collapseSlapBody();
       addHeaderLogo();
-
-      stage.removeAttribute('style');
-      stage.style.display = 'none';
+      removeRoomSection(left);
+      autoCalibrateOnCameraConnect(left);
+      stageShell?.querySelector<HTMLElement>('.stage-top')?.remove();
+      swapViewSwitch(stageShell);
+      installImmersiveKeys();
     })();
   }, []);
 
@@ -58,7 +79,7 @@ function AppShell() {
   return (
     <>
       <div className="app-shell grid h-dvh grid-cols-12 grid-rows-[auto_1fr] gap-6 bg-background p-6 text-foreground">
-        <div className="col-span-12">
+        <div className="col-header col-span-12">
           <PlusCard className={`${plusSlot} h-16`}>
             <div ref={headerSlot} className="relative z-10 h-full w-full" />
           </PlusCard>
@@ -71,7 +92,7 @@ function AppShell() {
             />
           </GridCard>
         </div>
-        <div className="col-span-12 min-h-0 sm:col-span-8 lg:col-span-6">
+        <div className="col-stage col-span-12 min-h-0 sm:col-span-8 lg:col-span-6">
           <PlusCard className={`${plusSlot} h-full`}>
             <div
               ref={stageSlot}
@@ -106,8 +127,6 @@ function AppShell() {
   );
 }
 
-// Lift the Q/E/Space/Drag key hint out of the stage overlay and drop it into
-// the left sidebar as its own panel-section (so it matches Face/Camera/Room).
 function moveKeyHintToLeftPanel(
   stageShell: HTMLElement | null | undefined,
   leftPanel: HTMLElement | null | undefined,
@@ -116,12 +135,10 @@ function moveKeyHintToLeftPanel(
   const hint = stageShell.querySelector<HTMLElement>('.stage-bottom > .hint');
   if (!hint) return;
 
-  // Menu-only "Click → Punch" entry. No handler wired — placeholder for a
-  // future click-to-punch command.
   const clickEntry = document.createElement('span');
   clickEntry.innerHTML =
     '<kbd class="kbd-icon" aria-label="Click"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 9 5 12 1.774-5.226L21 14 9 9z"/><path d="M16.071 16.071 19.5 19.5"/><path d="M7.188 2.239 8.28 5.482"/><path d="M2.24 7.187l3.24 1.092"/><path d="M18.761 2.239 17.671 5.482"/><path d="M23.76 7.187l-3.239 1.092"/></svg>Click</kbd>Punch';
-  hint.appendChild(clickEntry);
+  hint.insertBefore(clickEntry, hint.firstChild);
 
   const section = document.createElement('section');
   section.className = 'panel-section';
@@ -132,9 +149,6 @@ function moveKeyHintToLeftPanel(
   leftPanel.appendChild(section);
 }
 
-// Wrap the technical rig controls behind an Advanced toggle. This same
-// section becomes the destination for Softness + Distance sliders too, so
-// its heading is renamed to just "Advanced".
 function wrapAdvancedSection(rightPanel: HTMLElement | null) {
   if (!rightPanel) return;
   const sections = rightPanel.querySelectorAll<HTMLElement>(':scope > section.panel-section');
@@ -159,17 +173,12 @@ function wrapAdvancedSection(rightPanel: HTMLElement | null) {
   }
 }
 
-// Contact-response tweaks: promote Peak deformation into the top metric grid
-// (mirroring #compression via observer) and move Softness + Distance sliders
-// into the Advanced section.
 function customizeContactResponse(rightPanel: HTMLElement | null) {
   if (!rightPanel) return;
 
   const advancedSection = rightPanel.querySelector<HTMLElement>('.advanced-section');
   const advancedHeading = advancedSection?.querySelector<HTMLElement>('h2');
 
-  // Move Softness + Distance sliders (label + input pairs) to the top of the
-  // Advanced section, just below the heading.
   const relocate = (labelSelector: string, inputSelector: string) => {
     const label = rightPanel
       .querySelector<HTMLElement>(labelSelector)
@@ -181,12 +190,10 @@ function customizeContactResponse(rightPanel: HTMLElement | null) {
       advancedSection.insertBefore(input, label.nextSibling);
     }
   };
-  // Insert Distance first so, after Softness is inserted after the heading,
-  // the visible order becomes Softness → Distance.
   relocate('#distance-value', '#distance');
   relocate('#softness-value', '#softness');
+  relocate('#impact-strength-value', '#impact-strength');
 
-  // Add Peak metric to the grid; mirror #compression via MutationObserver.
   const grid = rightPanel.querySelector<HTMLElement>('.metric-grid');
   const compressionEl = rightPanel.querySelector<HTMLElement>('#compression');
   if (grid && compressionEl) {
@@ -209,17 +216,19 @@ function customizeContactResponse(rightPanel: HTMLElement | null) {
     });
   }
 
-  // Hide the standalone Peak deformation row. #compression stays in the DOM
-  // so main.js's textContent updates keep firing.
   const peakRow = compressionEl?.closest<HTMLElement>('.controls-label');
   if (peakRow) peakRow.style.display = 'none';
+
+  // Drop the Left/Right hook click buttons — Q/E keyboard shortcuts still fire
+  // the same hook() function (main.js:1543-1544).
+  const leftHook = rightPanel.querySelector('#left-hook');
+  const rightHook = rightPanel.querySelector('#right-hook');
+  const hookRow = leftHook?.closest('.row');
+  leftHook?.remove();
+  rightHook?.remove();
+  if (hookRow && !hookRow.children.length) hookRow.remove();
 }
 
-// Header: hide the two meshy checkboxes (Photo → 3D self, Compress GLB),
-// force compress-toggle on so GLBs are always compressed, and promote the
-// beat-yourself button to a prominent, always-clickable "Beat me". The
-// button already knows how to build a Meshy head on first click if none is
-// loaded yet (main.js line 781).
 function bakeBeatMeButton() {
   const meshyPanel = document.getElementById('meshy-panel');
   if (!meshyPanel) return;
@@ -235,34 +244,103 @@ function bakeBeatMeButton() {
     btn.classList.remove('small');
     btn.classList.add('primary');
   }
+  document.getElementById('capture-open')?.remove();
 }
 
-// Collapse the punch-detector metric list (.slap-body) behind an in-HUD
-// Advanced toggle. Metric rows: Approach / Rise / Palm size / Last hit /
-// Latency. The webcam view and title stay visible.
-function collapseSlapBody() {
-  const hud = document.getElementById('slap-hud');
-  if (!hud) return;
-  const body = hud.querySelector<HTMLElement>('.slap-body');
-  if (!body) return;
-  body.classList.add('slap-body-collapsed');
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'slap-advanced-toggle';
-  toggle.textContent = 'Advanced ▾';
-  toggle.setAttribute('aria-expanded', 'false');
-  toggle.addEventListener('click', () => {
-    const collapsed = body.classList.toggle('slap-body-collapsed');
-    toggle.textContent = collapsed ? 'Advanced ▾' : 'Advanced ▴';
-    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+// Replace the vanilla Surface/Geometry/Wireframe .view-switch with the
+// AnimatedTabs React component. Preserves main.js's setView() wiring by
+// capturing each original button's onclick and calling it when the matching
+// tab activates.
+function swapViewSwitch(stageShell: HTMLElement | null | undefined) {
+  if (!stageShell) return;
+  const box = stageShell.querySelector<HTMLElement>('.view-switch');
+  if (!box) return;
+  const buttons = Array.from(box.querySelectorAll<HTMLButtonElement>('button'));
+  if (!buttons.length) return;
+
+  const tabs = buttons.map((b) => ({ id: b.id, label: b.textContent?.trim() ?? b.id }));
+  const handlers = new Map<string, (() => void) | null>(
+    buttons.map((b) => [b.id, b.onclick ? (b.onclick.bind(b) as () => void) : null]),
+  );
+  const defaultTab = buttons.find((b) => b.classList.contains('active'))?.id ?? tabs[0].id;
+
+  box.innerHTML = '';
+  box.classList.add('view-switch-react');
+  createRoot(box).render(
+    <AnimatedTabs
+      tabs={tabs}
+      defaultTab={defaultTab}
+      onChange={(id) => handlers.get(id)?.()}
+    />,
+  );
+}
+
+// After the user connects the webcam, wait for cameraActive to flip true,
+// then trigger calibration once and remove the now-redundant Calibrate +
+// Scan my arms buttons so the left sidebar stays scroll-free.
+function autoCalibrateOnCameraConnect(leftPanel: HTMLElement | null | undefined) {
+  const calibrate = document.getElementById('calibrate') as HTMLButtonElement | null;
+  const scanArms = document.getElementById('scan-arms') as HTMLElement | null;
+  const armAppearance = document.getElementById('arm-appearance');
+  if (armAppearance) armAppearance.style.display = 'none';
+  if (scanArms) scanArms.style.display = 'none';
+
+  if (!calibrate) return;
+  let done = false;
+  const id = window.setInterval(() => {
+    const win = window as unknown as PunchingFace;
+    const state = win.__punchingFace?.state;
+    if (!done && state?.cameraActive) {
+      done = true;
+      window.setTimeout(() => calibrate.click(), 250);
+      window.setTimeout(() => {
+        calibrate.remove();
+        clearInterval(id);
+      }, 750);
+    }
+  }, 250);
+  // Failsafe: stop polling after a minute even if no camera connects.
+  window.setTimeout(() => clearInterval(id), 60_000);
+  // If the sidebar has a solitary muted line under the buttons, drop it.
+  leftPanel?.querySelectorAll('.muted').forEach((el) => {
+    const text = el.textContent?.trim() ?? '';
+    if (/awaiting capture|calibrat/i.test(text)) (el as HTMLElement).style.display = 'none';
   });
-  body.parentElement?.insertBefore(toggle, body);
 }
 
-// Prepend the PNG logo to .brand (leftmost item in the top menu bar).
+// Immersive fullscreen keyboard support:
+//   ESC     — exit immersive
+//   Enter   — while immersive, toggle a fixed bottom-left camera panel
+function installImmersiveKeys() {
+  window.addEventListener('keydown', (e) => {
+    const inField =
+      e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+    if (inField) return;
+    const body = document.body;
+    if (e.key === 'Escape' && body.classList.contains('immersive')) {
+      body.classList.remove('immersive', 'camera-open');
+      e.preventDefault();
+    } else if (e.key === 'Enter' && body.classList.contains('immersive')) {
+      body.classList.toggle('camera-open');
+      e.preventDefault();
+    }
+  });
+}
+
+function removeRoomSection(leftPanel: HTMLElement | null | undefined) {
+  if (!leftPanel) return;
+  leftPanel
+    .querySelectorAll<HTMLElement>(':scope > section.panel-section')
+    .forEach((section) => {
+      const h2 = section.querySelector('h2');
+      if (h2 && h2.textContent?.trim() === 'Room') section.remove();
+    });
+}
+
 function addHeaderLogo() {
   const brand = document.querySelector<HTMLElement>('.app-shell header .brand');
   if (!brand) return;
+  brand.querySelector(':scope > svg')?.remove();
   const img = document.createElement('img');
   img.src = '/punching-face-logo.png';
   img.alt = 'Punching Face';

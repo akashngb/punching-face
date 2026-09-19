@@ -1634,16 +1634,18 @@ body.immersive .app-shell .col-left, body.immersive .app-shell .col-right { disp
 .slap-advanced-toggle:hover { background: #fff; color: #000; border-color: #fff; }
 .slap-body.slap-body-collapsed { display: none !important; }
 
-/* Key command hint: in-panel styling (2-col grid of dark kbds). */
-.app-shell .panel .hint { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 5px 10px; font-size: 10px; color: #000; margin: 0; }
-.app-shell .panel .hint span { display: flex; align-items: center; gap: 8px; font-size: 10px; }
-.app-shell .panel .hint kbd { background: #000; color: #fff; border: 1px solid #000; min-width: 26px; text-align: center; padding: 3px 6px; margin: 0; font: 600 9px 'Space Grotesk', monospace; letter-spacing: .6px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.app-shell .panel .hint kbd.kbd-icon svg { width: 12px; height: 12px; flex: 0 0 auto; }
+/* Key command hint: in-panel styling (vertical stack of dark kbds). */
+.app-shell .panel .hint { display: flex; flex-direction: column; align-items: stretch; gap: 5px; font-size: 13px; color: #000; margin: 0; }
+.app-shell .panel .hint span { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.app-shell .panel .hint kbd { background: #000; color: #fff; border: 1px solid #000; min-width: 38px; text-align: center; padding: 4px 8px; margin: 0; font: 600 12px 'Space Grotesk', monospace; letter-spacing: .6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.app-shell .panel .hint kbd.kbd-icon svg { width: 15px; height: 15px; flex: 0 0 auto; }
 
-/* Metric grid: 3 columns (Contacts / Last speed / Peak), tighter numerals. */
-.app-shell .panel .metric-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 6px 0 8px; }
-.app-shell .panel .metric strong { font-size: 18px; letter-spacing: -.6px; }
-.app-shell .panel .metric small, .app-shell .panel .metric em { font-size: 9px; }
+/* Metric grid: 3 columns (Contacts / Last speed / Peak), centered per column. */
+.app-shell .panel .metric-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 10px 0 14px; text-align: center; }
+.app-shell .panel .metric { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.app-shell .panel .metric strong { font-size: 30px; letter-spacing: -1px; line-height: 1.05; display: block; text-align: center; color: #000; }
+.app-shell .panel .metric strong em { font-size: 12px; letter-spacing: 0; margin-left: 3px; color: #666; }
+.app-shell .panel .metric small { font-size: 11px; color: #000; letter-spacing: .2px; text-align: center; display: block; }
 .app-shell .panel .signal { height: 32px; margin: 4px 0 6px; }
 
 /* Compact panel rhythm. */
@@ -1695,3 +1697,81 @@ body.immersive .app-shell .col-left, body.immersive .app-shell .col-right { disp
 .app-shell .panel .impact-controls details { padding: 0; }
 .app-shell .panel .impact-controls details summary { font-size: 10px; margin: 6px 0 0; }
 .app-shell .panel #impact-strength { margin-top: 2px; }
+
+/* Camera preview + hand overlay: wrap #webcam so #slap-view-hand can sit on
+   top of it as an absolute overlay. Matches the video's mirroring so the
+   tracked hand lines up with the visible hand. */
+.app-shell .panel .camera-view { position: relative; width: 100%; margin-top: 0; }
+.app-shell .panel .camera-view #slap-view-hand { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; transform: scaleX(-1); }
+
+/* ============================================================
+   Additional overrides: AnimatedTabs, true fullscreen, and the
+   fixed-position camera panel that appears on Enter while in
+   fullscreen.
+   ============================================================ */
+
+/* View-switch → AnimatedTabs: neutralise the vanilla box chrome so only the
+   React pill remains visible. text-foreground var must be white here since
+   the pill sits on the black stage-shell. */
+.app-shell .view-switch.view-switch-react {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: #fff;
+}
+.app-shell .view-switch.view-switch-react button {
+  color: #fff;
+  background: transparent;
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font: 500 12px 'DM Sans', sans-serif;
+  letter-spacing: .3px;
+  cursor: pointer;
+}
+.app-shell .view-switch.view-switch-react button:hover {
+  color: #ffffffcc;
+}
+.app-shell .view-switch.view-switch-react .flex.space-x-1 {
+  gap: 4px;
+  background: #000c;
+  padding: 4px;
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+}
+
+/* Fix hand overlay: SVG should NOT be mirrored — landmark coords are already
+   in the mirrored display space. */
+.app-shell .panel .camera-view #slap-view-hand { transform: none; }
+
+/* True fullscreen: kill header, sidebars, gutter, padding — leave only the
+   stage card at edge-to-edge. */
+body.immersive .app-shell {
+  grid-template-columns: 1fr !important;
+  grid-template-rows: 1fr !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}
+body.immersive .app-shell .col-header,
+body.immersive .app-shell .col-left,
+body.immersive .app-shell .col-right { display: none !important; }
+body.immersive .app-shell .col-stage { grid-column: 1 / -1; }
+body.immersive .app-shell .col-stage > * { border: 0 !important; }
+
+/* Enter-toggled camera panel in fullscreen: floats bottom-left with the
+   #webcam preview + hand overlay. .camera-view is normally inline in the
+   sidebar; when body.immersive.camera-open, hoist it to a floating dock. */
+body.immersive.camera-open .app-shell .col-left { display: block !important; position: fixed; bottom: 20px; left: 20px; width: 260px; height: auto; max-height: 40vh; z-index: 60; }
+body.immersive.camera-open .app-shell .col-left > * {
+  height: auto;
+  background: #000e;
+  border: 1px solid #ffffff33;
+  padding: 10px;
+}
+body.immersive.camera-open .app-shell .col-left > * > * { overflow: hidden; }
+/* Inside the floating panel, hide everything except the CAMERA section. */
+body.immersive.camera-open .app-shell .col-left aside .panel-section { display: none !important; }
+body.immersive.camera-open .app-shell .col-left aside .panel-section:has(#webcam) { display: block !important; padding: 0; }
+body.immersive.camera-open .app-shell .col-left aside .panel-section:has(#webcam) > *:not(.camera-view):not(h2) { display: none !important; }
+body.immersive.camera-open .app-shell .col-left aside .panel-section:has(#webcam) h2 { color: #fff; margin: 0 0 6px; }
+
