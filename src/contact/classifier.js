@@ -18,17 +18,18 @@
 // discrete high-speed contacts. `observe()` / `releaseAt()` remain available
 // for sustained-contact classifications a future scenario may need.
 
-const RELEASE_THRESHOLD_MS = 120;     // if no observe() for this long, treat as release
-const PRESS_DWELL_MS = 180;           // observe() this long before we call it a press
-const STRIKE_MIN_SPEED = 1.5;         // m/s
-const REBOUND_WINDOW_MS = 350;        // release speed above threshold within N ms of press-end
+const RELEASE_THRESHOLD_MS = 120; // if no observe() for this long, treat as release
+const PRESS_DWELL_MS = 180; // observe() this long before we call it a press
+const STRIKE_MIN_SPEED = 1.5; // m/s
+const REBOUND_WINDOW_MS = 350; // release speed above threshold within N ms of press-end
 
 export class ContactClassifier {
-  constructor({regionFromPoint, onEvent}) {
-    if (typeof regionFromPoint !== 'function') throw new Error('regionFromPoint required');
+  constructor({ regionFromPoint, onEvent }) {
+    if (typeof regionFromPoint !== 'function')
+      throw new Error('regionFromPoint required');
     this._regionFromPoint = regionFromPoint;
     this._onEvent = onEvent || (() => {});
-    this._active = null;            // {region, pressure, since, last, samples, pointAvg}
+    this._active = null; // {region, pressure, since, last, samples, pointAvg}
     this._lastStrikeAt = new Map();
     this._sweepTimer = null;
     if (typeof setInterval === 'function') {
@@ -38,7 +39,10 @@ export class ContactClassifier {
     }
   }
 
-  dispose() { if (this._sweepTimer) clearInterval(this._sweepTimer); this._sweepTimer = null; }
+  dispose() {
+    if (this._sweepTimer) clearInterval(this._sweepTimer);
+    this._sweepTimer = null;
+  }
 
   /**
    * A discrete high-speed impact — Arena's punch. Emits a strike event.
@@ -47,7 +51,8 @@ export class ContactClassifier {
   strike(contact) {
     const region = contact.region ?? this._regionFromPoint(contact.point);
     if (!region) return null;
-    const force = contact.force ?? Math.min(100, Math.max(0, (contact.speed || 0) * 32));
+    const force =
+      contact.force ?? Math.min(100, Math.max(0, (contact.speed || 0) * 32));
     // Debounce: two strikes on the same region within 80 ms are the same hit.
     // Use `has()` rather than a numeric sentinel — `performance.now()` starts
     // near zero in Node, which would falsely eat the very first strike.
@@ -55,7 +60,14 @@ export class ContactClassifier {
     const last = this._lastStrikeAt.get(region);
     if (last !== undefined && now - last < 80) return null;
     this._lastStrikeAt.set(region, now);
-    const event = {type: 'strike', region, force, speed: contact.speed || 0, mode: contact.mode || 'hook', t: now};
+    const event = {
+      type: 'strike',
+      region,
+      force,
+      speed: contact.speed || 0,
+      mode: contact.mode || 'hook',
+      t: now,
+    };
     this._emit(event);
     return event;
   }
@@ -68,12 +80,28 @@ export class ContactClassifier {
   observe(contact) {
     const now = performance.now();
     const region = this._regionFromPoint(contact.point);
-    if (!region) { this._maybeRelease(now); return null; }
-    const pressure = contact.pressure ?? Math.min(1, Math.max(0.05, 0.15 + (contact.velocity ? 0.1 / contact.velocity : 0.35)));
+    if (!region) {
+      this._maybeRelease(now);
+      return null;
+    }
+    const pressure =
+      contact.pressure ??
+      Math.min(
+        1,
+        Math.max(0.05, 0.15 + (contact.velocity ? 0.1 / contact.velocity : 0.35)),
+      );
     if (!this._active || this._active.region !== region) {
       // Region change = end previous press, start a new press candidate.
       this._maybeRelease(now);
-      this._active = {region, since: now, last: now, samples: 1, pressure, pointAvg: {...contact.point}, emittedPress: false};
+      this._active = {
+        region,
+        since: now,
+        last: now,
+        samples: 1,
+        pressure,
+        pointAvg: { ...contact.point },
+        emittedPress: false,
+      };
       return null;
     }
     this._active.last = now;
@@ -82,7 +110,12 @@ export class ContactClassifier {
     this._active.pointAvg = _averagePoint(this._active.pointAvg, contact.point, 0.15);
     if (!this._active.emittedPress && now - this._active.since >= PRESS_DWELL_MS) {
       this._active.emittedPress = true;
-      const event = {type: 'press', region: this._active.region, pressure: this._active.pressure, t: now};
+      const event = {
+        type: 'press',
+        region: this._active.region,
+        pressure: this._active.pressure,
+        t: now,
+      };
       this._emit(event);
       return event;
     }
@@ -94,8 +127,8 @@ export class ContactClassifier {
    * detects releases if the caller stops calling observe().
    * @param {{speed?:number, point?:{x,y,z}}} release
    */
-  releaseAt({speed = 0} = {}) {
-    this._maybeRelease(performance.now(), {speed});
+  releaseAt({ speed = 0 } = {}) {
+    this._maybeRelease(performance.now(), { speed });
   }
 
   _sweep() {
@@ -109,15 +142,25 @@ export class ContactClassifier {
     const a = this._active;
     if (!a) return;
     this._active = null;
-    if (!a.emittedPress) return;    // we never registered a real press; nothing to release
+    if (!a.emittedPress) return; // we never registered a real press; nothing to release
     const releaseSpeed = override?.speed ?? 0.5;
-    const rebound = releaseSpeed > 0.3 && (now - a.last) < REBOUND_WINDOW_MS;
-    const event = {type: 'release', region: a.region, speed: releaseSpeed, rebound, t: now};
+    const rebound = releaseSpeed > 0.3 && now - a.last < REBOUND_WINDOW_MS;
+    const event = {
+      type: 'release',
+      region: a.region,
+      speed: releaseSpeed,
+      rebound,
+      t: now,
+    };
     this._emit(event);
   }
 
   _emit(event) {
-    try { this._onEvent(event); } catch (error) { console.warn('[classifier]', error); }
+    try {
+      this._onEvent(event);
+    } catch (error) {
+      console.warn('[classifier]', error);
+    }
   }
 }
 
@@ -128,7 +171,6 @@ function _averagePoint(prev, next, alpha) {
     z: prev.z * (1 - alpha) + next.z * alpha,
   };
 }
-
 
 // -------------------------- Region maps ------------------------------------
 //
@@ -142,7 +184,7 @@ function _averagePoint(prev, next, alpha) {
  */
 export function arenaRegions(point) {
   if (!point) return null;
-  const {x, y, z} = point;
+  const { x, y, z } = point;
   if (Math.abs(z) > 0.14) return null;
   if (y < -0.055) return 'jaw';
   if (Math.abs(x) < 0.045 && y > -0.02) return 'nose';

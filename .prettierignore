@@ -1,0 +1,11 @@
+node_modules/
+.local/
+.venv/
+public/*
+!public/face-worker.js
+!public/tracking-worker.js
+dist/
+dist-guest/
+artifacts/
+target/
+package-lock.json

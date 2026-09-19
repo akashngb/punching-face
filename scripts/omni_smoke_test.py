@@ -22,6 +22,7 @@ gateway's exact event schema diverges from that document, this script prints the
 raw upstream reply so you can adjust the field names. It does not guess and
 silently succeed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,6 +63,7 @@ except Exception:
 # Configuration loading (env > .env > .local/secrets/omni.json)
 # ---------------------------------------------------------------------------
 
+
 def load_env_file(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -87,14 +89,23 @@ def resolve_config() -> dict:
     secrets = load_secrets()
 
     def pick(env_key, secret_key, default=None):
-        return os.environ.get(env_key) or env.get(env_key) or secrets.get(secret_key) or default
+        return (
+            os.environ.get(env_key)
+            or env.get(env_key)
+            or secrets.get(secret_key)
+            or default
+        )
 
     return {
         'api_key': pick('OMNI_API_KEY', 'apiKey'),
-        'base_url': (pick('OMNI_BASE_URL', 'baseUrl', 'https://yibuapi.com/v1') or '').rstrip('/'),
+        'base_url': (
+            pick('OMNI_BASE_URL', 'baseUrl', 'https://yibuapi.com/v1') or ''
+        ).rstrip('/'),
         'realtime_url': pick('OMNI_REALTIME_URL', 'realtimeUrl'),
         'model': pick('OMNI_MODEL', 'model', 'qwen3.5-omni-flash'),
-        'realtime_model': pick('OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-flash-realtime'),
+        'realtime_model': pick(
+            'OMNI_REALTIME_MODEL', 'realtimeModel', 'qwen3.5-omni-flash-realtime'
+        ),
         'voice': pick('OMNI_VOICE', 'voice', 'Cherry'),
         'cloned_voice': pick('OMNI_CLONED_VOICE_ID', 'clonedVoiceId'),
     }
@@ -103,6 +114,7 @@ def resolve_config() -> dict:
 # ---------------------------------------------------------------------------
 # Test fixtures (a tiny gray JPEG + a 0.6 s tone WAV) — no assets required
 # ---------------------------------------------------------------------------
+
 
 def tiny_gray_jpeg() -> bytes:
     """A valid 16x16 gray JPEG, hand-encoded. About 350 bytes.
@@ -119,12 +131,16 @@ def tiny_gray_jpeg() -> bytes:
         b'AAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3'
         b'ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWm'
         b'p6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEB'
-        b'AAA/APH6KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK/9k=')
+        b'AAA/APH6KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK/9k='
+    )
 
 
-def tiny_tone_wav(seconds: float = 0.6, freq: float = 440.0, rate: int = 16000) -> bytes:
+def tiny_tone_wav(
+    seconds: float = 0.6, freq: float = 440.0, rate: int = 16000
+) -> bytes:
     """A short mono 16 kHz PCM WAV, generated in-memory."""
     import math
+
     n = int(seconds * rate)
     buf = bytearray()
     for i in range(n):
@@ -133,6 +149,7 @@ def tiny_tone_wav(seconds: float = 0.6, freq: float = 440.0, rate: int = 16000) 
         s = int(env * 0.25 * 32767 * math.sin(2 * math.pi * freq * i / rate))
         buf += struct.pack('<h', s)
     import io
+
     out = io.BytesIO()
     with wave.open(out, 'wb') as w:
         w.setnchannels(1)
@@ -146,15 +163,34 @@ def tiny_tone_wav(seconds: float = 0.6, freq: float = 440.0, rate: int = 16000) 
 # Plan C: HTTP chat/completions (matches sponsor_server.py::omni_request)
 # ---------------------------------------------------------------------------
 
-def _record(model: str, api_key: str, endpoint: str, transport: str, ok: bool,
-            latency_s: float, response_json=None, status_code=None, error=None,
-            purpose: str = 'punching-face.smoke') -> None:
+
+def _record(
+    model: str,
+    api_key: str,
+    endpoint: str,
+    transport: str,
+    ok: bool,
+    latency_s: float,
+    response_json=None,
+    status_code=None,
+    error=None,
+    purpose: str = 'punching-face.smoke',
+) -> None:
     if _audit is None:
         return
     try:
-        _audit(model=model, api_key=api_key, endpoint=endpoint, purpose=purpose,
-               transport=transport, ok=ok, status_code=status_code,
-               latency_s=latency_s, response_json=response_json or {}, error=error)
+        _audit(
+            model=model,
+            api_key=api_key,
+            endpoint=endpoint,
+            purpose=purpose,
+            transport=transport,
+            ok=ok,
+            status_code=status_code,
+            latency_s=latency_s,
+            response_json=response_json or {},
+            error=error,
+        )
     except Exception:
         pass
 
@@ -164,14 +200,32 @@ def probe_plan_c(cfg: dict, image_b64: str, audio_b64: str, tool_test: bool) -> 
     body = {
         'model': cfg['model'],
         'messages': [
-            {'role': 'system', 'content': 'You are a helpful assistant. Answer very briefly.'},
-            {'role': 'user', 'content': [
-                {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + image_b64}},
-                {'type': 'text', 'text': 'What colour is this image? One word.'},
-            ]},
-            {'role': 'user', 'content': [
-                {'type': 'input_audio', 'input_audio': {'data': 'data:;base64,' + audio_b64, 'format': 'wav'}},
-            ]},
+            {
+                'role': 'system',
+                'content': 'You are a helpful assistant. Answer very briefly.',
+            },
+            {
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'image_url',
+                        'image_url': {'url': 'data:image/jpeg;base64,' + image_b64},
+                    },
+                    {'type': 'text', 'text': 'What colour is this image? One word.'},
+                ],
+            },
+            {
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'input_audio',
+                        'input_audio': {
+                            'data': 'data:;base64,' + audio_b64,
+                            'format': 'wav',
+                        },
+                    },
+                ],
+            },
         ],
         'stream': False,
         'max_tokens': 60,
@@ -180,24 +234,31 @@ def probe_plan_c(cfg: dict, image_b64: str, audio_b64: str, tool_test: bool) -> 
         # text-only; voice discovery happens against the Realtime path.
     }
     if tool_test:
-        body['tools'] = [{
-            'type': 'function',
-            'function': {
-                'name': 'log_finding',
-                'description': 'Report what you saw',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {'color': {'type': 'string'}, 'confidence': {'type': 'number'}},
-                    'required': ['color'],
+        body['tools'] = [
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'log_finding',
+                    'description': 'Report what you saw',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'color': {'type': 'string'},
+                            'confidence': {'type': 'number'},
+                        },
+                        'required': ['color'],
+                    },
                 },
             }
-        }]
+        ]
         body['tool_choice'] = 'auto'
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
-        headers={'Content-Type': 'application/json',
-                 'Authorization': 'Bearer ' + cfg['api_key']},
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + cfg['api_key'],
+        },
     )
     start = time.perf_counter()
     try:
@@ -207,16 +268,41 @@ def probe_plan_c(cfg: dict, image_b64: str, audio_b64: str, tool_test: bool) -> 
     except urllib.error.HTTPError as e:
         elapsed_ms = round((time.perf_counter() - start) * 1000)
         detail = e.read(1200).decode('utf-8', 'replace')
-        _record(cfg['model'], cfg['api_key'], url, 'http', ok=False,
-                latency_s=(time.perf_counter() - start), status_code=e.code,
-                error=f'HTTP {e.code}: {detail[:200]}')
-        return {'ok': False, 'plan': 'C', 'status': e.code, 'detail': detail, 'elapsed_ms': elapsed_ms}
+        _record(
+            cfg['model'],
+            cfg['api_key'],
+            url,
+            'http',
+            ok=False,
+            latency_s=(time.perf_counter() - start),
+            status_code=e.code,
+            error=f'HTTP {e.code}: {detail[:200]}',
+        )
+        return {
+            'ok': False,
+            'plan': 'C',
+            'status': e.code,
+            'detail': detail,
+            'elapsed_ms': elapsed_ms,
+        }
     elapsed_ms = round((time.perf_counter() - start) * 1000)
     payload = json.loads(raw)
-    _record(cfg['model'], cfg['api_key'], url, 'http', ok=True,
-            latency_s=(time.perf_counter() - start), status_code=status,
-            response_json=payload)
-    result = {'ok': True, 'plan': 'C', 'elapsed_ms': elapsed_ms, 'usage': payload.get('usage')}
+    _record(
+        cfg['model'],
+        cfg['api_key'],
+        url,
+        'http',
+        ok=True,
+        latency_s=(time.perf_counter() - start),
+        status_code=status,
+        response_json=payload,
+    )
+    result = {
+        'ok': True,
+        'plan': 'C',
+        'elapsed_ms': elapsed_ms,
+        'usage': payload.get('usage'),
+    }
     choices = payload.get('choices') or []
     if choices:
         msg = choices[0].get('message') or {}
@@ -235,6 +321,7 @@ def probe_plan_c(cfg: dict, image_b64: str, audio_b64: str, tool_test: bool) -> 
 # ---------------------------------------------------------------------------
 # Plan A: minimal WebSocket client (RFC 6455) — no `websockets` dep
 # ---------------------------------------------------------------------------
+
 
 def ws_connect(url: str, headers: dict, timeout: float = 20.0):
     """Return a (socket, remaining-response-bytes) pair after handshake."""
@@ -274,7 +361,10 @@ def ws_connect(url: str, headers: dict, timeout: float = 20.0):
     while b'\r\n\r\n' not in buf:
         chunk = sock.recv(4096)
         if not chunk:
-            raise RuntimeError('Upstream closed before finishing WS handshake.\n' + buf.decode('utf-8', 'replace'))
+            raise RuntimeError(
+                'Upstream closed before finishing WS handshake.\n'
+                + buf.decode('utf-8', 'replace')
+            )
         buf += chunk
     head, _, rest = buf.partition(b'\r\n\r\n')
     head_text = head.decode('utf-8', 'replace')
@@ -314,6 +404,7 @@ def _ws_send_frame(sock, opcode: int, payload: bytes) -> None:
 
 def ws_recv_frame(sock, leftover: bytearray, deadline: float):
     """Read one complete frame. Blocks up to (deadline-now) seconds."""
+
     def _read_at_least(n):
         while len(leftover) < n:
             sock.settimeout(max(0.1, deadline - time.time()))
@@ -321,6 +412,7 @@ def ws_recv_frame(sock, leftover: bytearray, deadline: float):
             if not chunk:
                 raise RuntimeError('Upstream closed while reading frame.')
             leftover.extend(chunk)
+
     _read_at_least(2)
     b1, b2 = leftover[0], leftover[1]
     fin = bool(b1 & 0x80)
@@ -339,13 +431,13 @@ def ws_recv_frame(sock, leftover: bytearray, deadline: float):
     mask = b''
     if masked:
         _read_at_least(offset + 4)
-        mask = bytes(leftover[offset:offset+4])
+        mask = bytes(leftover[offset : offset + 4])
         offset += 4
     _read_at_least(offset + length)
-    payload = bytes(leftover[offset:offset+length])
+    payload = bytes(leftover[offset : offset + length])
     if masked:
         payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-    del leftover[:offset+length]
+    del leftover[: offset + length]
     return fin, opcode, payload
 
 
@@ -357,16 +449,27 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
         return {'ok': False, 'plan': 'A', 'reason': 'OMNI_REALTIME_URL not set'}
     # yibuapi confirmed URL shape: wss://yibuapi.com/v1/realtime?model=<slug>
     from urllib.parse import urlencode as _q
+
     full_url = url + ('&' if '?' in url else '?') + _q({'model': cfg['realtime_model']})
     headers = {'Authorization': 'Bearer ' + cfg['api_key']}
     start = time.perf_counter()
     try:
         sock, rest = ws_connect(full_url, headers, timeout=20)
     except Exception as e:
-        _record(cfg['realtime_model'], cfg['api_key'], full_url, 'websocket', ok=False,
-                latency_s=(time.perf_counter() - start),
-                error=f'WS handshake failed: {type(e).__name__}: {e}')
-        return {'ok': False, 'plan': 'A', 'reason': f'WS handshake failed: {type(e).__name__}: {e}'}
+        _record(
+            cfg['realtime_model'],
+            cfg['api_key'],
+            full_url,
+            'websocket',
+            ok=False,
+            latency_s=(time.perf_counter() - start),
+            error=f'WS handshake failed: {type(e).__name__}: {e}',
+        )
+        return {
+            'ok': False,
+            'plan': 'A',
+            'reason': f'WS handshake failed: {type(e).__name__}: {e}',
+        }
 
     leftover = bytearray(rest)
     deadline = time.time() + 60
@@ -382,16 +485,29 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
     try:
         # 1. wait for session.created (up to 20 s)
         while time.time() < deadline:
-            fin, opcode, payload = ws_recv_frame(sock, leftover, min(time.time() + 20, deadline))
+            fin, opcode, payload = ws_recv_frame(
+                sock, leftover, min(time.time() + 20, deadline)
+            )
             if opcode == 0x1:
                 created = json.loads(payload.decode('utf-8', 'replace'))
                 if created.get('type') == 'session.created':
                     break
                 if created.get('type') == 'error':
-                    _record(cfg['realtime_model'], cfg['api_key'], full_url, 'websocket', ok=False,
-                            latency_s=(time.perf_counter() - start),
-                            error=json.dumps(created.get('error') or created)[:400])
-                    return {'ok': False, 'plan': 'A', 'reason': 'Upstream error before session.created: ' + json.dumps(created)[:400]}
+                    _record(
+                        cfg['realtime_model'],
+                        cfg['api_key'],
+                        full_url,
+                        'websocket',
+                        ok=False,
+                        latency_s=(time.perf_counter() - start),
+                        error=json.dumps(created.get('error') or created)[:400],
+                    )
+                    return {
+                        'ok': False,
+                        'plan': 'A',
+                        'reason': 'Upstream error before session.created: '
+                        + json.dumps(created)[:400],
+                    }
 
         # Voices verified against this key: Ethan, Serena, Dylan. Cherry / Chelsie
         # are rejected by yibuapi even though the public docs list them.
@@ -404,19 +520,36 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
         }
         if cfg.get('voice'):
             session_update['voice'] = cfg['voice']
-        ws_send_text(sock, json.dumps({'type': 'session.update', 'session': session_update}))
-        ws_send_text(sock, json.dumps({
-            'type': 'conversation.item.create',
-            'item': {
-                'type': 'message', 'role': 'user',
-                'content': [{'type': 'input_text', 'text': 'What colour is this test image? Answer in a single word.'}],
-            }
-        }))
+        ws_send_text(
+            sock, json.dumps({'type': 'session.update', 'session': session_update})
+        )
+        ws_send_text(
+            sock,
+            json.dumps(
+                {
+                    'type': 'conversation.item.create',
+                    'item': {
+                        'type': 'message',
+                        'role': 'user',
+                        'content': [
+                            {
+                                'type': 'input_text',
+                                'text': 'What colour is this test image? Answer in a single word.',
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
         # Yibuapi wants audio before image (verified experimentally: an
         # image-first ordering returns "Error append image before append audio").
-        ws_send_text(sock, json.dumps({'type': 'input_audio_buffer.append', 'audio': audio_b64}))
+        ws_send_text(
+            sock, json.dumps({'type': 'input_audio_buffer.append', 'audio': audio_b64})
+        )
         ws_send_text(sock, json.dumps({'type': 'input_audio_buffer.commit'}))
-        ws_send_text(sock, json.dumps({'type': 'input_image_buffer.append', 'image': image_b64}))
+        ws_send_text(
+            sock, json.dumps({'type': 'input_image_buffer.append', 'image': image_b64})
+        )
         ws_send_text(sock, json.dumps({'type': 'response.create'}))
 
         collected_text: list = []
@@ -438,7 +571,11 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
                 continue
             events_seen.append(msg.get('type') or 'unknown')
             typ = msg.get('type')
-            if typ in ('response.text.delta', 'response.output_text.delta', 'response.audio_transcript.delta'):
+            if typ in (
+                'response.text.delta',
+                'response.output_text.delta',
+                'response.audio_transcript.delta',
+            ):
                 collected_text.append(msg.get('delta') or msg.get('text') or '')
             elif typ in ('response.audio.delta', 'response.output_audio.delta'):
                 if msg.get('delta'):
@@ -449,27 +586,64 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
                 done_event = msg
                 break
             elif typ == 'error':
-                _record(cfg['realtime_model'], cfg['api_key'], full_url, 'websocket', ok=False,
-                        latency_s=(time.perf_counter() - start),
-                        error=json.dumps(msg.get('error') or msg)[:400])
-                return {'ok': False, 'plan': 'A', 'reason': 'Upstream error: ' + json.dumps(msg)[:400],
-                        'events': events_seen}
-        result = {'ok': True, 'plan': 'A', 'events': events_seen, 'text': ''.join(collected_text)}
+                _record(
+                    cfg['realtime_model'],
+                    cfg['api_key'],
+                    full_url,
+                    'websocket',
+                    ok=False,
+                    latency_s=(time.perf_counter() - start),
+                    error=json.dumps(msg.get('error') or msg)[:400],
+                )
+                return {
+                    'ok': False,
+                    'plan': 'A',
+                    'reason': 'Upstream error: ' + json.dumps(msg)[:400],
+                    'events': events_seen,
+                }
+        result = {
+            'ok': True,
+            'plan': 'A',
+            'events': events_seen,
+            'text': ''.join(collected_text),
+        }
         if collected_audio_b64:
             OUT_DIR.mkdir(parents=True, exist_ok=True)
             audio_path = OUT_DIR / f'plan-a-reply-{int(time.time())}.pcm16'
-            audio_path.write_bytes(b''.join(base64.b64decode(chunk) for chunk in collected_audio_b64))
+            audio_path.write_bytes(
+                b''.join(base64.b64decode(chunk) for chunk in collected_audio_b64)
+            )
             result['audio_pcm16'] = str(audio_path)
-        result['usage'] = (done_event.get('response') or {}).get('usage') or done_event.get('usage')
-        _record(cfg['realtime_model'], cfg['api_key'], full_url, 'websocket', ok=True,
-                latency_s=(time.perf_counter() - start), status_code=101,
-                response_json=done_event)
+        result['usage'] = (done_event.get('response') or {}).get(
+            'usage'
+        ) or done_event.get('usage')
+        _record(
+            cfg['realtime_model'],
+            cfg['api_key'],
+            full_url,
+            'websocket',
+            ok=True,
+            latency_s=(time.perf_counter() - start),
+            status_code=101,
+            response_json=done_event,
+        )
         return result
     except Exception as e:
-        _record(cfg['realtime_model'], cfg['api_key'], full_url, 'websocket', ok=False,
-                latency_s=(time.perf_counter() - start),
-                response_json=done_event, error=f'{type(e).__name__}: {e}')
-        return {'ok': False, 'plan': 'A', 'reason': f'WS session error: {type(e).__name__}: {e}'}
+        _record(
+            cfg['realtime_model'],
+            cfg['api_key'],
+            full_url,
+            'websocket',
+            ok=False,
+            latency_s=(time.perf_counter() - start),
+            response_json=done_event,
+            error=f'{type(e).__name__}: {e}',
+        )
+        return {
+            'ok': False,
+            'plan': 'A',
+            'reason': f'WS session error: {type(e).__name__}: {e}',
+        }
     finally:
         try:
             sock.close()
@@ -481,6 +655,7 @@ def probe_plan_a(cfg: dict, image_b64: str, audio_b64: str) -> dict:
 # Voice cloning probe (yibuapi may not expose this; document the failure mode)
 # ---------------------------------------------------------------------------
 
+
 def probe_voice_clone(cfg: dict, audio_b64: str) -> dict:
     if not cfg['api_key']:
         return {'ok': False, 'reason': 'no api key'}
@@ -488,27 +663,53 @@ def probe_voice_clone(cfg: dict, audio_b64: str) -> dict:
     # differs between Alibaba's public docs and the yibuapi gateway).
     url = cfg['base_url'].rstrip('/') + '/audio/voices'
     body = {'name': f'omni-smoke-{int(time.time())}', 'sample_wav_b64': audio_b64}
-    request = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                     headers={'Content-Type': 'application/json',
-                                              'Authorization': 'Bearer ' + cfg['api_key']})
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + cfg['api_key'],
+        },
+    )
     start = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            _record('voice-clone', cfg['api_key'], url, 'http', ok=True,
-                    latency_s=(time.perf_counter() - start), status_code=response.status,
-                    purpose='punching-face.voice_clone')
+            _record(
+                'voice-clone',
+                cfg['api_key'],
+                url,
+                'http',
+                ok=True,
+                latency_s=(time.perf_counter() - start),
+                status_code=response.status,
+                purpose='punching-face.voice_clone',
+            )
             return {'ok': True, 'body': json.loads(response.read())}
     except urllib.error.HTTPError as e:
         detail = e.read(600).decode('utf-8', 'replace')
-        _record('voice-clone', cfg['api_key'], url, 'http', ok=False,
-                latency_s=(time.perf_counter() - start), status_code=e.code,
-                error=f'HTTP {e.code}: {detail[:200]}',
-                purpose='punching-face.voice_clone')
+        _record(
+            'voice-clone',
+            cfg['api_key'],
+            url,
+            'http',
+            ok=False,
+            latency_s=(time.perf_counter() - start),
+            status_code=e.code,
+            error=f'HTTP {e.code}: {detail[:200]}',
+            purpose='punching-face.voice_clone',
+        )
         return {'ok': False, 'status': e.code, 'detail': detail}
     except Exception as e:
-        _record('voice-clone', cfg['api_key'], url, 'http', ok=False,
-                latency_s=(time.perf_counter() - start), error=f'{type(e).__name__}: {e}',
-                purpose='punching-face.voice_clone')
+        _record(
+            'voice-clone',
+            cfg['api_key'],
+            url,
+            'http',
+            ok=False,
+            latency_s=(time.perf_counter() - start),
+            error=f'{type(e).__name__}: {e}',
+            purpose='punching-face.voice_clone',
+        )
         return {'ok': False, 'reason': f'{type(e).__name__}: {e}'}
 
 
@@ -516,19 +717,34 @@ def probe_voice_clone(cfg: dict, audio_b64: str) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     p = argparse.ArgumentParser(description='Detect OMNI plan (A/B/C).')
-    p.add_argument('--image', help='Image file to send instead of the tiny gray fixture.')
-    p.add_argument('--audio', help='WAV file (mono 16 kHz PCM16) instead of the fixture tone.')
-    p.add_argument('--skip-realtime', action='store_true', help='Skip Plan A even if URL configured.')
+    p.add_argument(
+        '--image', help='Image file to send instead of the tiny gray fixture.'
+    )
+    p.add_argument(
+        '--audio', help='WAV file (mono 16 kHz PCM16) instead of the fixture tone.'
+    )
+    p.add_argument(
+        '--skip-realtime',
+        action='store_true',
+        help='Skip Plan A even if URL configured.',
+    )
     p.add_argument('--skip-voice-clone', action='store_true')
     p.add_argument('--skip-tool', action='store_true')
     args = p.parse_args()
 
     cfg = resolve_config()
     if not cfg['api_key']:
-        print('OMNI_API_KEY not set — nothing to probe. Apply at https://luma.com/0fhypcu0.', file=sys.stderr)
-        print('Config seen:', json.dumps({k: v for k, v in cfg.items() if k != 'api_key'}, indent=2))
+        print(
+            'OMNI_API_KEY not set — nothing to probe. Apply at https://luma.com/0fhypcu0.',
+            file=sys.stderr,
+        )
+        print(
+            'Config seen:',
+            json.dumps({k: v for k, v in cfg.items() if k != 'api_key'}, indent=2),
+        )
         return 2
 
     if args.image:
@@ -542,7 +758,10 @@ def main() -> int:
     image_b64 = base64.b64encode(image_bytes).decode()
     audio_b64 = base64.b64encode(audio_bytes).decode()
 
-    report = {'config': {k: v for k, v in cfg.items() if k != 'api_key'}, 'api_key_present': True}
+    report = {
+        'config': {k: v for k, v in cfg.items() if k != 'api_key'},
+        'api_key_present': True,
+    }
 
     if not args.skip_realtime:
         print('\n== Plan A (Realtime WebSocket) ==')
@@ -553,10 +772,20 @@ def main() -> int:
 
     print('\n== Plan C (chat/completions) ==')
     try:
-        report['plan_c'] = probe_plan_c(cfg, image_b64, audio_b64, tool_test=not args.skip_tool)
-        print(json.dumps({k: v for k, v in report['plan_c'].items() if k != 'raw'}, indent=2)[:1200])
+        report['plan_c'] = probe_plan_c(
+            cfg, image_b64, audio_b64, tool_test=not args.skip_tool
+        )
+        print(
+            json.dumps(
+                {k: v for k, v in report['plan_c'].items() if k != 'raw'}, indent=2
+            )[:1200]
+        )
     except urllib.error.HTTPError as e:
-        report['plan_c'] = {'ok': False, 'status': e.code, 'detail': e.read(600).decode('utf-8', 'replace')}
+        report['plan_c'] = {
+            'ok': False,
+            'status': e.code,
+            'detail': e.read(600).decode('utf-8', 'replace'),
+        }
         print(json.dumps(report['plan_c'], indent=2))
     except Exception as e:
         report['plan_c'] = {'ok': False, 'reason': f'{type(e).__name__}: {e}'}

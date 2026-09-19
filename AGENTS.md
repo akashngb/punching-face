@@ -13,6 +13,21 @@ evidence tags and recipes are in [OPEN_SOURCE_STACK.md](OPEN_SOURCE_STACK.md). R
   **Keep these hooks when editing:** the second `<script>` in `index.html`; the `window.__punchingFace.remotePunch` block at
   the end of `src/main.js`; the `sponsor_obs` lines in `server.py`, `physics_server.py`, `face_pipeline.py` and
   `scripts/build_photo_face.py`. `tests/sponsors-hook.test.mjs` fails if one is lost: restore the hook, keep the test.
+- **Meshy engine** (README "Reconstruction engines"): the scan dialog can build a saved scan with Meshy's cloud
+  image-to-3D instead of the local pipeline. All of it is in `meshy_backend.py`, `src/meshy-engine.js` and
+  `src/meshy-engine.css`. **Keep these hooks when editing:** `import meshy_backend`, the `MESHY = ...` line, the two
+  `meshy_backend.ROUTES` lines and `meshy_backend.api_key()` in `server.py`; the `EngineChoice` import and the
+  `this.engines` lines in `src/face-capture.js`. It loads its GLB through `#face-file`'s change handler in
+  `src/main.js` and reads `#busy`, `#model-name`, `#scene-name`, `#model-kind`, `#physics-engine`, `#photo-count`
+  and `window.__labReady`, so it needs no code in `main.js`: keep those ids. `tests/meshy-engine-hook.test.mjs`
+  fails if any of this is lost. Never start a second `server.py` on the real `.local/face-captures`: `FaceStore`
+  marks every running job there as failed at start-up. Point `CONTACT_FACE_CAPTURES` at a copy instead.
+- `PIPELINE_SPEEDUP.md`: measured video-to-model timings (fresh build 309 s serial, 122 s accelerated, identical outputs)
+  and the recipe for the rest. The server now launches `scripts/build_photo_face_fast.py`, which installs
+  `scripts/pipeline_accel.py` and then calls `build_photo_face.run()` unchanged. If you edit `photo_geometry.zbuffer`,
+  `photo_geometry.raster_atlas` or `photo_detail.prepare_detail_frames`, its accelerator switches itself off and the
+  build log says `STALE`: port the edit, then `.venv/bin/python scripts/pipeline_accel.py --pin`. Layers 2 and 3 in
+  that file are edits inside `bake_photographs()` and `run()`, left for whoever owns those functions.
 - `OPEN_SOURCE_STACK.md`: which open-source projects fit each failing stage, what was verified, what is still a guess.
 - `.local/third_party/`: 17 pinned, permissively licensed sources (reference code and ungated model data).
   Recreate with `.venv/bin/python scripts/setup_third_party.py`; pins are in `scripts/third_party_manifest.json`.
@@ -29,6 +44,12 @@ evidence tags and recipes are in [OPEN_SOURCE_STACK.md](OPEN_SOURCE_STACK.md). R
 - `.venv` is Python 3.9.6, and that is a ceiling: `open3d==0.18.0` and `pycolmap==3.13.0` are the last releases with
   3.9 wheels. Put new ML/geometry tools in a separate Python 3.12/3.13 env under `.local/` and call them by
   subprocess, as `.local/newton-env` already does. Do not upgrade `.venv` in place.
+- The several `requirements*.txt` files are deliberate, one per interpreter: do not merge them. Each starts with
+  `# env:` and `# python:` header lines (plus `# optional: yes` where the app runs without it), and
+  `python3 scripts/check_python_envs.py` fails if an environment or a pin drifts from them. Give any new
+  requirements file the same header. `openai` in `requirements.txt` looks unused but is imported by the image CLI
+  that `scripts/predict_rear.py` runs with `.venv`'s interpreter: keep it. The README table under
+  "Installation and checks" is the one place that explains the environments.
 - Never import `pycolmap` and `open3d` in one process on macOS (conflicting OpenMP runtimes; native crash).
 
 ## Verified traps

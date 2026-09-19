@@ -13,6 +13,7 @@ current URL and behaviour bit-for-bit identical while OMNI Realtime lands.
 Standard library only, so it runs in the existing Python 3.9 venv. WS server
 implements RFC 6455 directly against the socket; no `websockets` dep required.
 """
+
 from __future__ import annotations
 
 import base64
@@ -54,7 +55,15 @@ try:
 except Exception:
     append_audit_record = None  # type: ignore
 
-FIELDS = ('apiKey', 'baseUrl', 'model', 'voice', 'realtimeUrl', 'realtimeModel', 'clonedVoiceId')
+FIELDS = (
+    'apiKey',
+    'baseUrl',
+    'model',
+    'voice',
+    'realtimeUrl',
+    'realtimeModel',
+    'clonedVoiceId',
+)
 ENV_MAP = {
     'apiKey': 'OMNI_API_KEY',
     'baseUrl': 'OMNI_BASE_URL',
@@ -98,8 +107,12 @@ def config() -> dict:
     out = {k: DEFAULTS.get(k) for k in FIELDS}
     for k in FIELDS:
         env_key = ENV_MAP[k]
-        out[k] = os.environ.get(env_key) or env_file.get(env_key) or saved.get(k) or out[k]
-    out['enabled'] = (os.environ.get('OMNI_ENABLED', env_file.get('OMNI_ENABLED', 'true'))).lower() != 'false'
+        out[k] = (
+            os.environ.get(env_key) or env_file.get(env_key) or saved.get(k) or out[k]
+        )
+    out['enabled'] = (
+        os.environ.get('OMNI_ENABLED', env_file.get('OMNI_ENABLED', 'true'))
+    ).lower() != 'false'
     return out
 
 
@@ -108,6 +121,7 @@ def config() -> dict:
 # frames we send to the browser are unmasked. Frames to/from the upstream
 # server we treat as a client, so those are masked when we send.
 # ---------------------------------------------------------------------------
+
 
 def _send_frame(sock, opcode: int, payload: bytes, mask: bool) -> None:
     header = bytearray([0x80 | (opcode & 0x0F)])
@@ -138,6 +152,7 @@ def _recv_frame(sock, leftover: bytearray, deadline: float | None = None):
             if not chunk:
                 raise ConnectionError('peer closed')
             leftover.extend(chunk)
+
     read_at_least(2)
     b1, b2 = leftover[0], leftover[1]
     fin = bool(b1 & 0x80)
@@ -156,18 +171,19 @@ def _recv_frame(sock, leftover: bytearray, deadline: float | None = None):
     mask = b''
     if masked:
         read_at_least(offset + 4)
-        mask = bytes(leftover[offset:offset+4])
+        mask = bytes(leftover[offset : offset + 4])
         offset += 4
     read_at_least(offset + length)
-    payload = bytes(leftover[offset:offset+length])
+    payload = bytes(leftover[offset : offset + length])
     if masked:
         payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-    del leftover[:offset + length]
+    del leftover[: offset + length]
     return fin, opcode, payload
 
 
 class WSClientPeer:
     """Wraps a browser-side WebSocket after HTTP-upgrade succeeded."""
+
     def __init__(self, sock, buffered: bytes):
         self.sock = sock
         self.leftover = bytearray(buffered)
@@ -212,6 +228,7 @@ class WSClientPeer:
 
 class WSUpstream:
     """Client to the OMNI Realtime WebSocket endpoint."""
+
     def __init__(self, url: str, headers: dict, timeout: float = 20.0):
         parsed = urlparse(url)
         host = parsed.hostname
@@ -242,7 +259,10 @@ class WSUpstream:
         while b'\r\n\r\n' not in buf:
             chunk = self.sock.recv(4096)
             if not chunk:
-                raise RuntimeError('Upstream closed before finishing WS handshake:\n' + buf.decode('utf-8', 'replace'))
+                raise RuntimeError(
+                    'Upstream closed before finishing WS handshake:\n'
+                    + buf.decode('utf-8', 'replace')
+                )
             buf += chunk
         head, _, rest = buf.partition(b'\r\n\r\n')
         head_text = head.decode('utf-8', 'replace')
@@ -283,8 +303,10 @@ class WSUpstream:
 # to exercise the client engine's tool/audio/text handlers.
 # ---------------------------------------------------------------------------
 
+
 class MockUpstream:
     """Consumes client events; emits scripted responses. Same interface as WSUpstream."""
+
     def __init__(self):
         self.q = queue.Queue()
         self.closed = False
@@ -302,7 +324,15 @@ class MockUpstream:
         if typ == 'session.update':
             self.persona = (msg.get('session') or {}).get('instructions')
             self.tools = (msg.get('session') or {}).get('tools') or []
-            self._emit({'type': 'session.updated', 'session': {'mock': True, 'tools': [t.get('name') for t in self.tools]}})
+            self._emit(
+                {
+                    'type': 'session.updated',
+                    'session': {
+                        'mock': True,
+                        'tools': [t.get('name') for t in self.tools],
+                    },
+                }
+            )
         elif typ == 'input_audio_buffer.commit':
             self.pending_prompt = 'audio'
         elif typ == 'response.create':
@@ -312,7 +342,13 @@ class MockUpstream:
             # tool-dispatch UI can be validated end-to-end without a key.
             evt = msg.get('event') or {}
             if evt.get('type') == 'strike':
-                self._enqueue_tool('react_to_hit', {'location': evt.get('region'), 'severity': min(3, int((evt.get('force') or 0) / 30) + 1)})
+                self._enqueue_tool(
+                    'react_to_hit',
+                    {
+                        'location': evt.get('region'),
+                        'severity': min(3, int((evt.get('force') or 0) / 30) + 1),
+                    },
+                )
 
     def send_binary(self, payload: bytes) -> None:
         return
@@ -322,8 +358,14 @@ class MockUpstream:
 
     def _enqueue_tool(self, name: str, args: dict) -> None:
         call_id = 'mock-' + uuid.uuid4().hex[:6]
-        self._emit({'type': 'response.function_call_arguments.done', 'name': name, 'call_id': call_id,
-                    'arguments': json.dumps(args)})
+        self._emit(
+            {
+                'type': 'response.function_call_arguments.done',
+                'name': name,
+                'call_id': call_id,
+                'arguments': json.dumps(args),
+            }
+        )
 
     def _respond(self, req: dict):
         # A tiny mock line so the UI has something to display.
@@ -331,11 +373,21 @@ class MockUpstream:
         for word in text.split(' '):
             self._emit({'type': 'response.output_text.delta', 'delta': word + ' '})
             time.sleep(0.02)
-        self._emit({'type': 'response.done', 'response': {'usage': {'total_tokens': len(text.split())}, 'mock': True}})
+        self._emit(
+            {
+                'type': 'response.done',
+                'response': {
+                    'usage': {'total_tokens': len(text.split())},
+                    'mock': True,
+                },
+            }
+        )
 
     def recv(self):
         # Blocking read like a real socket; wrapped as a text frame.
-        opcode, payload = self.q.get(timeout=60)[0], self.q.get_nowait()[1] if False else None
+        opcode, payload = self.q.get(timeout=60)[0], (
+            self.q.get_nowait()[1] if False else None
+        )
         # Simpler: fetch a message from the queue.
         raise RuntimeError('use pump()')
 
@@ -356,6 +408,7 @@ class MockUpstream:
 # ---------------------------------------------------------------------------
 # HTTP server that upgrades to WebSocket at /omni/realtime and serves /health.
 # ---------------------------------------------------------------------------
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'OmniRelay/1'
@@ -390,10 +443,18 @@ class Handler(BaseHTTPRequestHandler):
             payload = {
                 'ok': True,
                 'enabled': cfg['enabled'],
-                'plan': 'A' if (cfg.get('realtimeUrl') and cfg.get('apiKey')) else ('C' if cfg.get('apiKey') else 'mock'),
+                'plan': (
+                    'A'
+                    if (cfg.get('realtimeUrl') and cfg.get('apiKey'))
+                    else ('C' if cfg.get('apiKey') else 'mock')
+                ),
                 'model': cfg.get('realtimeModel'),
                 'voice': cfg.get('voice'),
-                'gateway': (cfg.get('realtimeUrl') or cfg.get('baseUrl') or '').split('/')[2] if (cfg.get('realtimeUrl') or cfg.get('baseUrl')) else None,
+                'gateway': (
+                    (cfg.get('realtimeUrl') or cfg.get('baseUrl') or '').split('/')[2]
+                    if (cfg.get('realtimeUrl') or cfg.get('baseUrl'))
+                    else None
+                ),
                 'clonedVoice': bool(cfg.get('clonedVoiceId')),
             }
             body = json.dumps(payload).encode()
@@ -425,7 +486,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
             return
-        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        accept = base64.b64encode(
+            hashlib.sha1((key + WS_GUID).encode()).digest()
+        ).decode()
         response = (
             'HTTP/1.1 101 Switching Protocols\r\n'
             'Upgrade: websocket\r\n'
@@ -454,6 +517,7 @@ def log(msg: str) -> None:
 # Bridge: pumps events between the browser and either a real upstream or the
 # in-process mock. Adds per-hop timings that judges can see via /omni/latency.
 # ---------------------------------------------------------------------------
+
 
 class Bridge:
     def __init__(self, peer: WSClientPeer):
@@ -494,14 +558,18 @@ class Bridge:
             self.upstream_url = url
             self.upstream_model = model
             self.metrics['plan'] = 'A'
-            self.metrics['upstream_connect_ms'] = round((time.perf_counter() - t0) * 1000)
+            self.metrics['upstream_connect_ms'] = round(
+                (time.perf_counter() - t0) * 1000
+            )
             log(f'session {self.session_id} plan=A upstream={url}')
             return
         self.mock = MockUpstream()
         self.metrics['plan'] = 'mock'
         log(f'session {self.session_id} plan=mock (no realtime url or key)')
 
-    def _audit_turn(self, response_json: dict | None, ok: bool, error: str | None = None) -> None:
+    def _audit_turn(
+        self, response_json: dict | None, ok: bool, error: str | None = None
+    ) -> None:
         """Write one audit ledger record for a completed (or failed) turn.
 
         Called only when a real upstream is used. Uses the sponsor's own writer
@@ -526,13 +594,17 @@ class Bridge:
             log(f'audit write failed: {type(e).__name__}: {e}')
 
     def _send_ready(self):
-        self.peer.send_text(json.dumps({
-            'type': 'omni.session.ready',
-            'plan': self.metrics['plan'],
-            'model': self.cfg.get('realtimeModel'),
-            'mock': self.mock is not None,
-            'sessionId': self.session_id,
-        }))
+        self.peer.send_text(
+            json.dumps(
+                {
+                    'type': 'omni.session.ready',
+                    'plan': self.metrics['plan'],
+                    'model': self.cfg.get('realtimeModel'),
+                    'mock': self.mock is not None,
+                    'sessionId': self.session_id,
+                }
+            )
+        )
 
     def run(self):
         try:
@@ -543,8 +615,11 @@ class Bridge:
             self.upstream_url = self.upstream_url or (self.cfg.get('realtimeUrl') or '')
             self.upstream_model = self.upstream_model or self.cfg.get('realtimeModel')
             self._audit_turn(None, ok=False, error=f'{type(e).__name__}: {e}')
-            self.peer.send_text(json.dumps({'type': 'omni.session.error',
-                                            'reason': f'{type(e).__name__}: {e}'}))
+            self.peer.send_text(
+                json.dumps(
+                    {'type': 'omni.session.error', 'reason': f'{type(e).__name__}: {e}'}
+                )
+            )
             self.peer.close()
             return
         self._send_ready()
@@ -568,7 +643,10 @@ class Bridge:
                         # in the audit ledger (guide §2). Non-fatal on parse fail.
                         try:
                             msg = json.loads(text)
-                            if isinstance(msg, dict) and msg.get('type') == 'session.update':
+                            if (
+                                isinstance(msg, dict)
+                                and msg.get('type') == 'session.update'
+                            ):
                                 session = msg.get('session') or {}
                                 purpose = str(session.get('purpose') or '').strip()
                                 if purpose:
@@ -599,7 +677,9 @@ class Bridge:
                             self.upstream.send_binary(payload)  # pong (masked)
                             continue
                         if first:
-                            self.metrics['upstream_first_byte_ms'] = round((time.time() - self.session_start) * 1000)
+                            self.metrics['upstream_first_byte_ms'] = round(
+                                (time.time() - self.session_start) * 1000
+                            )
                             first = False
                         if opcode == 0x1:
                             text = payload.decode('utf-8', 'replace')
@@ -608,15 +688,24 @@ class Bridge:
                             # code) sends `response.done` with usage inside.
                             try:
                                 msg = json.loads(text)
-                                if isinstance(msg, dict) and msg.get('type') == 'response.done':
+                                if (
+                                    isinstance(msg, dict)
+                                    and msg.get('type') == 'response.done'
+                                ):
                                     self.last_response_done = msg
                                     self.turns_seen += 1
                                     self.metrics['turns'] = self.turns_seen
                                     # One audit record per turn; guide §6 permits
                                     # per-response accounting on streaming.
                                     self._audit_turn(msg, ok=True)
-                                elif isinstance(msg, dict) and msg.get('type') == 'error':
-                                    self._audit_turn(msg, ok=False, error=json.dumps(msg.get('error') or msg)[:400])
+                                elif (
+                                    isinstance(msg, dict) and msg.get('type') == 'error'
+                                ):
+                                    self._audit_turn(
+                                        msg,
+                                        ok=False,
+                                        error=json.dumps(msg.get('error') or msg)[:400],
+                                    )
                             except Exception:
                                 pass
                             self.peer.send_text(text)
@@ -655,11 +744,18 @@ class Bridge:
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
     cfg = config()
-    plan = 'A' if (cfg.get('realtimeUrl') and cfg.get('apiKey')) else ('C-via-sponsor' if cfg.get('apiKey') else 'mock')
-    log(f'listening on http://127.0.0.1:{PORT} · enabled={cfg["enabled"]} · plan={plan}')
+    plan = (
+        'A'
+        if (cfg.get('realtimeUrl') and cfg.get('apiKey'))
+        else ('C-via-sponsor' if cfg.get('apiKey') else 'mock')
+    )
+    log(
+        f'listening on http://127.0.0.1:{PORT} · enabled={cfg["enabled"]} · plan={plan}'
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

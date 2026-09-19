@@ -1,3 +1,14 @@
-# Separate Python 3.10+ environment; the capture stack can keep its own Python.
+# Newton physics environment: physics_server.py, newton_face.py and the tests that import them
+# (tests/newton_test.py, tests/physics_sessions_test.py).
+#
+# env: .local/newton-env
+# python: >=3.10
+# install: .local/newton-env/bin/python -m pip install -r requirements-newton.txt
+#
+# Why a second environment: newton 1.6.0 and warp-lang 1.17.0 both require Python 3.10+, and the
+# capture environment (.venv, requirements.txt) is Python 3.9 on the dev machine. This one is
+# built from Homebrew python3.13 with NumPy 2, which requirements.txt cannot install on. The
+# physics service is its own process (physics_server.py, port 5175), so the two environments
+# never share an interpreter.
 newton==1.6.0
 warp-lang==1.17.0

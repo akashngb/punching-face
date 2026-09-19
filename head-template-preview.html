@@ -1,13 +1,83 @@
-<!doctype html><html><body style="margin:0;background:#242c30"><script>window.exports={}</script><script src="/vendor/vision_bundle.cjs"></script><script type="module">
-import * as THREE from '/node_modules/three/build/three.module.js';
-import {OrbitControls} from '/node_modules/three/examples/jsm/controls/OrbitControls.js';
-const r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});r.setSize(768,768);document.body.append(r.domElement);r.setClearColor('#464c52');
-const scene=new THREE.Scene(),c=new THREE.PerspectiveCamera(30,1,.001,10);c.position.set(0,.01,.65);c.lookAt(0,0,0);const control=new OrbitControls(c,r.domElement);control.target.set(0,0,0);
-scene.add(new THREE.HemisphereLight(0xffffff,0x505066,2));const light=new THREE.DirectionalLight(0xffffff,3);light.position.set(-.4,.6,1);scene.add(light);
-const a=await fetch(new URLSearchParams(location.search).get('scan')?'/api/face-asset?id='+new URLSearchParams(location.search).get('scan')+'&asset=mesh.json':'/head-template/head.json').then(r=>r.json());const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(a.positions,3));g.setIndex(a.indices);g.computeVertexNormals();scene.add(new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0xb79480,roughness:.85,side:THREE.DoubleSide})));
-function frame(){r.render(scene,c);requestAnimationFrame(frame)}frame();window.template={r,c,scene,g};
-const {FilesetResolver,FaceLandmarker}=window.exports,files=await FilesetResolver.forVisionTasks('/wasm');
-const detector=await FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'/models/face_landmarker.task',delegate:'CPU'},runningMode:'IMAGE',numFaces:1});
-r.render(scene,c);const result=detector.detect(r.domElement);const ray=new THREE.Raycaster();const points=(result.faceLandmarks?.[0]||[]).slice(0,468).map(p=>{ray.setFromCamera(new THREE.Vector2(p.x*2-1,1-p.y*2),c);const hits=ray.intersectObjects(scene.children);return hits[0]?.point.toArray()||null;});
-const pre=document.createElement('pre');pre.id='landmark-result';pre.hidden=true;pre.textContent=JSON.stringify({points,landmarks:result.faceLandmarks?.[0]?.slice(0,468)});document.body.append(pre);
-</script></body></html>
+<!doctype html>
+<html>
+  <body style="margin: 0; background: #242c30">
+    <script>
+      window.exports = {};
+    </script>
+    <script src="/vendor/vision_bundle.cjs"></script>
+    <script type="module">
+      import * as THREE from '/node_modules/three/build/three.module.js';
+      import { OrbitControls } from '/node_modules/three/examples/jsm/controls/OrbitControls.js';
+      const r = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true,
+      });
+      r.setSize(768, 768);
+      document.body.append(r.domElement);
+      r.setClearColor('#464c52');
+      const scene = new THREE.Scene(),
+        c = new THREE.PerspectiveCamera(30, 1, 0.001, 10);
+      c.position.set(0, 0.01, 0.65);
+      c.lookAt(0, 0, 0);
+      const control = new OrbitControls(c, r.domElement);
+      control.target.set(0, 0, 0);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x505066, 2));
+      const light = new THREE.DirectionalLight(0xffffff, 3);
+      light.position.set(-0.4, 0.6, 1);
+      scene.add(light);
+      const a = await fetch(
+        new URLSearchParams(location.search).get('scan')
+          ? '/api/face-asset?id=' +
+              new URLSearchParams(location.search).get('scan') +
+              '&asset=mesh.json'
+          : '/head-template/head.json',
+      ).then((r) => r.json());
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(a.positions, 3));
+      g.setIndex(a.indices);
+      g.computeVertexNormals();
+      scene.add(
+        new THREE.Mesh(
+          g,
+          new THREE.MeshStandardMaterial({
+            color: 0xb79480,
+            roughness: 0.85,
+            side: THREE.DoubleSide,
+          }),
+        ),
+      );
+      function frame() {
+        r.render(scene, c);
+        requestAnimationFrame(frame);
+      }
+      frame();
+      window.template = { r, c, scene, g };
+      const { FilesetResolver, FaceLandmarker } = window.exports,
+        files = await FilesetResolver.forVisionTasks('/wasm');
+      const detector = await FaceLandmarker.createFromOptions(files, {
+        baseOptions: {
+          modelAssetPath: '/models/face_landmarker.task',
+          delegate: 'CPU',
+        },
+        runningMode: 'IMAGE',
+        numFaces: 1,
+      });
+      r.render(scene, c);
+      const result = detector.detect(r.domElement);
+      const ray = new THREE.Raycaster();
+      const points = (result.faceLandmarks?.[0] || []).slice(0, 468).map((p) => {
+        ray.setFromCamera(new THREE.Vector2(p.x * 2 - 1, 1 - p.y * 2), c);
+        const hits = ray.intersectObjects(scene.children);
+        return hits[0]?.point.toArray() || null;
+      });
+      const pre = document.createElement('pre');
+      pre.id = 'landmark-result';
+      pre.hidden = true;
+      pre.textContent = JSON.stringify({
+        points,
+        landmarks: result.faceLandmarks?.[0]?.slice(0, 468),
+      });
+      document.body.append(pre);
+    </script>
+  </body>
+</html>
