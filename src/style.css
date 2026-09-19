@@ -1616,7 +1616,7 @@ body.immersive .icon-btn { background: #000; color: #fff; border-color: #000; }
 .app-shell .panel { padding: 12px 14px; overflow: auto; height: 100%; background: transparent; border: 0; }
 .app-shell .stage-shell { position: absolute; inset: 0; background: #000; }
 .app-shell header { background: transparent; border: 0; padding: 0 18px; height: 100%; }
-.app-shell header .brand-logo { height: 44px; width: auto; object-fit: contain; display: block; }
+.app-shell header .brand-logo { height: 28px; width: auto; object-fit: contain; display: block; }
 
 /* Immersive collapse — swap grid, hide side slots. */
 body.immersive .app-shell { grid-template-columns: 1fr !important; }
@@ -1676,3 +1676,22 @@ body.immersive .app-shell .col-left, body.immersive .app-shell .col-right { disp
 .advanced-toggle { margin: 8px 0 14px; background: #fff; color: #000; border: 1px solid var(--line); letter-spacing: .4px; }
 .advanced-toggle:hover { background: #000; color: #fff; border-color: #000; }
 .advanced-section:not(.expanded) > *:not(.advanced-toggle) { display: none !important; }
+
+/* Compact overflow shaving (post-seeron-rigging merge): the Realism section
+   introduced more copy in the left sidebar; the right side added a Head
+   response dropdown + Impact magnitude + Impact lab disclosure. Trim
+   descriptive muted lines and tighten Realism/Impact chrome so both sides fit. */
+.app-shell .panel .realism-panel .muted,
+.app-shell .panel .realism-panel [role="status"],
+.app-shell .panel .realism-note,
+.app-shell .panel #head-mode-note,
+.app-shell .panel #realism-status,
+.app-shell .panel #tracking-status { display: none; }
+.app-shell .panel .realism-heading { margin: 0 0 6px; }
+.app-shell .panel .realism-heading h2 { margin: 0; }
+.app-shell .panel .realism-heading span { font-size: 8px; letter-spacing: 1.2px; }
+.app-shell .panel .impact-controls { margin: 6px 0 8px; }
+.app-shell .panel .impact-controls select { padding: 5px; font-size: 11px; }
+.app-shell .panel .impact-controls details { padding: 0; }
+.app-shell .panel .impact-controls details summary { font-size: 10px; margin: 6px 0 0; }
+.app-shell .panel #impact-strength { margin-top: 2px; }
