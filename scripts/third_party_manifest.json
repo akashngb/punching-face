@@ -1,0 +1,197 @@
+{
+  "about": "Pinned third-party sources for the CONTACT lab, fetched into .local/third_party (beside .local/sources; already skipped by the Vite watcher, the dependency scan and .gitignore). Reference code and ungated model data only: no binaries, no model weights, nothing here is executed by the fetch. Re-create with: .venv/bin/python scripts/setup_third_party.py",
+  "policy": "Only permissively licensed sources (MIT / Apache-2.0 / BSD / CC0), licence checked by reading the LICENSE text or file headers on 2026-09-19. Non-commercial, GPL/AGPL and custom-licence projects are cited by URL in OPEN_SOURCE_STACK.md instead of being copied here, so restricted code cannot be pasted into the project by accident.",
+  "resolved": "2026-09-19",
+  "entries": [
+    {
+      "name": "ICT-FaceKit",
+      "kind": "repo",
+      "url": "https://github.com/USC-ICT/ICT-FaceKit",
+      "sha": "da5f95a607f5e6b37755b38d3385d7f2853732e5",
+      "sparse": [
+        "FaceXModel",
+        "Scripts"
+      ],
+      "license": "MIT",
+      "fixes": "face",
+      "purpose": "Ungated full-head morphable template: 26,719 verts incl. ears/neck/scalp, teeth, eyeballs; 100 identity modes; 53 ARKit-named expression shapes that line up with MediaPipe's 52 blendshape scores. Replaces the 468-point landmark mesh, the gray estimated cranium and the 4 heuristic morphs."
+    },
+    {
+      "name": "GNM",
+      "kind": "repo",
+      "url": "https://github.com/google/GNM",
+      "sha": "a424b5153eec9154f3dfa5ee7f214e5817918d54",
+      "sparse": [
+        "gnm"
+      ],
+      "license": "Apache-2.0",
+      "fixes": "face",
+      "purpose": "Google GNM Head (2026): stronger ungated identity prior (17,821 verts, built from ~5,000 subjects) if ICT-FaceKit's identity space proves too generic. numpy/torch backends; needs Python >= 3.10."
+    },
+    {
+      "name": "gnm-webcam-puppet",
+      "kind": "repo",
+      "url": "https://github.com/edualvarado/gnm-webcam-puppet",
+      "sha": "888b83dca52e16bb84841337ef27a0f93aff3640",
+      "sparse": null,
+      "license": "Apache-2.0",
+      "fixes": "face",
+      "purpose": "Browser runtime for GNM plus webcam_puppet/assets/correspondence.npz: 473 MediaPipe-landmark -> GNM-vertex pairs with rigid-point flags. Load the .npz with allow_pickle=False."
+    },
+    {
+      "name": "spark",
+      "kind": "repo",
+      "url": "https://github.com/sparkjsdev/spark",
+      "sha": "4eb719afdb5b3655fe0bc290588e4728d9772405",
+      "sparse": [
+        "src",
+        "docs/docs",
+        "examples/interactive-deform"
+      ],
+      "license": "MIT",
+      "fixes": "splats",
+      "purpose": "Source, docs and the interactive-deform example for the Spark 2.2.0 renderer already in node_modules (which ships dist only). Read src/SplatSkinning.ts::applyCovSplatLBSkinning and src/SplatMesh.ts for the covariance-splat path that lets splats rotate/stretch/shear with the mesh."
+    },
+    {
+      "name": "map-anything",
+      "kind": "repo",
+      "url": "https://github.com/facebookresearch/map-anything",
+      "sha": "3d10cf7a3016fc0f9bb13a071ee66c47b10be0d9",
+      "sparse": null,
+      "license": "Apache-2.0 (code). Weights: facebook/map-anything-apache is Apache-2.0; facebook/map-anything is CC-BY-NC-4.0",
+      "fixes": "arm, face",
+      "purpose": "Feed-forward multi-view poses + dense depth with merged MPS support; accepts KNOWN intrinsics. scripts/demo_inference_on_colmap_outputs.py turns an existing COLMAP solve into per-view depth for TSDF fusion."
+    },
+    {
+      "name": "Depth-Anything-3",
+      "kind": "repo",
+      "url": "https://github.com/ByteDance-Seed/Depth-Anything-3",
+      "sha": "3d835ec1a5802d64a8b8b15f817a1ab54809bfe4",
+      "sparse": null,
+      "license": "Apache-2.0 (code). Weights split: BASE/SMALL/METRIC-LARGE Apache-2.0; GIANT-1.1 and NESTED CC-BY-NC-4.0; LARGE-1.1 disputed",
+      "fixes": "face",
+      "purpose": "Pose-conditioned multi-view depth that lands in the COLMAP frame and scale (`da3 colmap ... --device mps`), i.e. a dense-geometry source the pipeline currently lacks."
+    },
+    {
+      "name": "MoGe",
+      "kind": "repo",
+      "url": "https://github.com/microsoft/MoGe",
+      "sha": "07444410f1e33f402353b99d6ccd26bd31e469e8",
+      "sparse": null,
+      "license": "MIT (LICENSE file also carries an Apache-2.0 section)",
+      "fixes": "face, arm",
+      "purpose": "MoGe-2 metric depth + normals per view, accepts a known fov_x. PINNED to a pre-v3 commit on purpose: main is v3, whose README says macOS is not supported."
+    },
+    {
+      "name": "Hierarchical-Localization",
+      "kind": "repo",
+      "url": "https://github.com/cvg/Hierarchical-Localization",
+      "sha": "c13273bd0ecc2917a35910fd843712a1c6243193",
+      "sparse": null,
+      "license": "Apache-2.0",
+      "fixes": "arm",
+      "purpose": "hloc: learned features/matching (ALIKED + LightGlue) written into a COLMAP database. Works with the project's current pycolmap 3.13. Submodules are deliberately NOT fetched (SuperGlue/SuperPoint carry restrictive licences; use the aliked configs)."
+    },
+    {
+      "name": "LightGlue",
+      "kind": "repo",
+      "url": "https://github.com/cvg/LightGlue",
+      "sha": "eb42fee2d71449efb0aa5c10549752b5d75384d8",
+      "sparse": null,
+      "license": "Apache-2.0",
+      "fixes": "arm",
+      "purpose": "Matcher used by hloc. Use the ALIKED or DISK extractors; avoid SuperPoint weights (Magic Leap licence)."
+    },
+    {
+      "name": "anny",
+      "kind": "repo",
+      "url": "https://github.com/naver/anny",
+      "sha": "ee5b909f320c67e40059cb7503af87e9d01856d6",
+      "sparse": null,
+      "license": "Apache-2.0 code; bundled MakeHuman/MPFB2 and Face Units data CC0-1.0",
+      "fixes": "arm",
+      "purpose": "Ungated, rigged full-body template (104 bones incl. fingers) to fit a personal arm + hand without MANO/SMPL-X. Stay on topology=\"anny\": the optional smplx topology downloads NON-COMMERCIAL assets."
+    },
+    {
+      "name": "MHR",
+      "kind": "repo",
+      "url": "https://github.com/facebookresearch/MHR",
+      "sha": "d96fafa33bbf018647c70c3525e91f53e79d2a14",
+      "sparse": null,
+      "license": "Apache-2.0",
+      "fixes": "arm",
+      "purpose": "Meta Momentum Human Rig: alternative ungated body/hand rig with LODs and pose correctives."
+    },
+    {
+      "name": "face-parsing",
+      "kind": "repo",
+      "url": "https://github.com/yakhyo/face-parsing",
+      "sha": "8a4729d95118d0e97c44185f9bdef3d6bfeaaf99",
+      "sparse": null,
+      "license": "MIT code. Released ONNX weights are trained on CelebAMask-HQ (non-commercial research terms)",
+      "fixes": "masks",
+      "purpose": "BiSeNet 19-class face parsing incl. eyeglasses, hair, ears, brows, lips, neck. Mask glasses/hair out of SfM and training; project labels onto the mesh for a per-region stiffness table."
+    },
+    {
+      "name": "JoltPhysics.js",
+      "kind": "repo",
+      "url": "https://github.com/jrouwe/JoltPhysics.js",
+      "sha": "3e3b5ff0bae3db323395d72fe1ae1ca693dedc17",
+      "sparse": null,
+      "license": "MIT",
+      "fixes": "physics",
+      "purpose": "Maintained WASM engine fallback: XPBD soft bodies with tet volume constraints, kinematic-collider contact with friction, and skinned constraints with back-stop (a ready-made skull/support layer). No self-collision."
+    },
+    {
+      "name": "single-files/ten-minute-physics",
+      "kind": "files",
+      "repo": "matthias-research/pages",
+      "sha": "568d9a9040a5e44e9b737decc63f7cc4c546b2c5",
+      "files": [
+        "tenMinutePhysics/10-softBodies.html",
+        "tenMinutePhysics/12-softBodySkinning.html",
+        "tenMinutePhysics/BlenderTetPlugin.py"
+      ],
+      "license": "MIT, stated in each file's own header (the repo has no LICENSE file). Only files carrying that header were taken",
+      "fixes": "physics",
+      "purpose": "Reference XPBD tetrahedral soft body (demo 10) and tet-cage -> visual-mesh barycentric skinning (demo 12: computeSkinningInfo / updateVisMesh). Basis for an in-browser Web Worker solver replacing the Newton HTTP loop. The repo is 473 MB, so only these files were taken."
+    },
+    {
+      "name": "single-files/dn-splatter",
+      "kind": "files",
+      "repo": "maturk/dn-splatter",
+      "sha": "97588b4290128ce7ba6fdbfaac3020b42b17de4c",
+      "files": [
+        "dn_splatter/export_mesh.py"
+      ],
+      "license": "Apache-2.0",
+      "fixes": "splat-to-mesh",
+      "purpose": "Permissively licensed reference for meshing from RENDERED depth/normal maps (DepthAndNormalMapsPoisson, TSDF variants) instead of from Gaussian centres."
+    },
+    {
+      "name": "single-files/nerfstudio",
+      "kind": "files",
+      "repo": "nerfstudio-project/nerfstudio",
+      "sha": "50e0e3c70c775e89333256213363badbf074f29d",
+      "files": [
+        "nerfstudio/exporter/tsdf_utils.py"
+      ],
+      "license": "Apache-2.0",
+      "fixes": "splat-to-mesh",
+      "purpose": "Compact pure-torch TSDF integration reference."
+    },
+    {
+      "name": "single-files/QtMeshEditor",
+      "kind": "files",
+      "repo": "fernandotonon/QtMeshEditor",
+      "sha": "cacc57e703d22b6cfe5f2da731143e4a86fa1ca5",
+      "files": [
+        "scripts/spike-facerig.py",
+        "docs/FACE_RIG_SPIKE.md"
+      ],
+      "license": "MIT",
+      "fixes": "face",
+      "purpose": "Worked example: parse ICT-FaceKit OBJs by hand (trimesh reorders vertices on these files), wrap the template with trimesh NRICP, transfer blendshapes."
+    }
+  ]
+}

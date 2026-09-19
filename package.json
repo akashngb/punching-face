@@ -1,0 +1,24 @@
+{
+  "name": "contact-spatial-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "test": "node --test tests/*.test.mjs",
+    "test:reconstruction": ".venv/bin/python tests/reconstruction_test.py",
+    "fixtures": ".venv/bin/python scripts/make_fixture.py"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.32",
+    "@sparkjsdev/spark": "2.2.0",
+    "@tensorflow-models/body-segmentation": "^1.0.2",
+    "@tensorflow/tfjs": "^4.22.0",
+    "pngjs": "^7.0.0",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.0"
+  }
+}

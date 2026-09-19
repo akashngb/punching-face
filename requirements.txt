@@ -1,0 +1,17 @@
+numpy<2
+open3d==0.18.0
+plyfile==1.0.3
+Pillow>=10,<12
+trimesh>=4,<5
+pycolmap==3.13.0
+xatlas==0.0.11
+networkx>=3.2,<4
+
+openai>=2,<3
+
+mapbox-earcut>=1.0,<2
+shapely>=2,<3
+
+opencv-python-headless>=4.10,<4.12
+
+rtree>=1.2,<2

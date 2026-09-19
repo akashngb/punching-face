@@ -1,0 +1,14 @@
+node_modules/
+.venv/
+dist/
+.local/
+__pycache__/
+public/generated/
+artifacts/
+target/
+.DS_Store
+*.py[cod]
+*.log
+.env
+.env.*
+!.env.example

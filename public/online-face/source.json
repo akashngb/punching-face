@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/aigc3d/LAM_WebRender/tree/main/asset/arkit",
+  "archive": "p2-1.zip",
+  "archiveSha256": "1f3fae0f9e3b137a065957f52e4761bda7f25f6531908b1bf1216e8a091097be",
+  "gaussians": 20018,
+  "method": "Official LAM example; skin POSITION plus learned Gaussian offsets. Single-image inferred avatar, not a multiview scan of the user.",
+  "license": "LAM_WebRender repository MIT. LAM weights have separate terms; example identity provenance is not independently verified. Local research demonstration only."
+}
