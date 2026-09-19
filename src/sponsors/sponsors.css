@@ -12,6 +12,7 @@
 #sponsor-dock section{padding:12px;display:none;max-height:min(62vh,520px);overflow:auto}#sponsor-dock section.active{display:block}
 #sponsor-dock .sd-row{display:flex;gap:6px;align-items:center;margin-top:8px}#sponsor-dock .sd-row>*{min-width:0}
 #sponsor-dock input[type=text],#sponsor-dock input[type=password]{flex:1;border:1px solid var(--line);border-radius:7px;padding:8px 9px;background:#fff}
+#sponsor-dock select{flex:1;border:1px solid var(--line);border-radius:7px;padding:8px 9px;background:#fff;font:inherit;color:inherit}
 #sponsor-dock button.primary{background:var(--green);border-color:var(--green);color:#f4f8ee}#sponsor-dock button.primary:hover{background:#1f4f3b}
 #sponsor-dock button.danger{background:#fbecea;border-color:#e6bdb6;color:#8a2f22}
 #sponsor-dock .sd-status{margin-top:8px;color:var(--muted);line-height:1.45;min-height:1.45em}

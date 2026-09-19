@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {SkinConstraints} from './skin-constraints.js';
 import {FaceImpactRig} from './impact-rig.js';
+import {FaceSpeechRig} from './speech-rig.js';
 
 export const clamp = (x,a,b) => Math.min(b,Math.max(a,x));
 
@@ -29,6 +30,7 @@ export class FaceDynamics {
     this.original=geometry.attributes.position.array.slice();
     this.rest=this.original.slice();
     this.impactRig=new FaceImpactRig(this.rest);
+    this.speechRig=new FaceSpeechRig(this.rest);
     this.offset=new Float32Array(this.rest.length);
     this.velocity=new Float32Array(this.rest.length);
     this.posedRest=new Float32Array(this.rest);this.membrane=membrane?new SkinConstraints(geometry):null;
@@ -50,6 +52,14 @@ export class FaceDynamics {
       this.stiffness[v]=320-190*cheek-170*lips+700*nose+450*forehead;
     }
     this.lastImpact=null;this.regionPeaks={cheeks:0,nose:0,lips:0,forehead:0,jaw:0};
+  }
+  // A landed punch reads over the top of a sentence rather than fighting it:
+  // the speech rig is scaled down while an impact is at its loudest, then
+  // returns as the impact decays. Cheap — the event queue is at most four.
+  get speechDuck(){
+    let peak=0;
+    for(const event of this.impactRig.events)peak=Math.max(peak,this.impactRig.envelope(event.age));
+    return 1-clamp(peak,0,1)*.85;
   }
   impulse(point,direction,speed,mode='hook'){
     this.impactRig.trigger(this.rest,point,direction,speed,this.softness,mode);
@@ -96,6 +106,7 @@ export class FaceDynamics {
   step(dt){
     dt=clamp(dt,0,1/30);
     this.impactRig.step(dt);
+    this.speechRig.step(dt,this.speechDuck);
     for(let i=0;i<this.rest.length;i+=3){const d=this.rigDelta(this.rest[i],this.rest[i+1],this.rest[i+2]);for(let j=0;j<3;j++)this.posedRest[i+j]=this.rest[i+j]+d[j];}
     this.membrane?.refreshReference(this.posedRest);
     const n=Math.max(1,Math.ceil(dt/(1/120))),h=dt/n;
@@ -123,7 +134,7 @@ export class FaceDynamics {
     this.maxDisplacement=0;
     for(const key in this.regionPeaks)this.regionPeaks[key]=0;
     for(let i=0;i<p.length;i+=3){
-      for(let j=0;j<3;j++)p[i+j]=this.posedRest[i+j]+this.offset[i+j]+this.impactRig.offset[i+j];
+      for(let j=0;j<3;j++)p[i+j]=this.posedRest[i+j]+this.offset[i+j]+this.impactRig.offset[i+j]+this.speechRig.offset[i+j];
       const amount=Math.hypot(this.offset[i]+this.impactRig.offset[i],this.offset[i+1]+this.impactRig.offset[i+1],this.offset[i+2]+this.impactRig.offset[i+2]);
       this.maxDisplacement=Math.max(this.maxDisplacement,amount);
       const x=this.rest[i],y=this.rest[i+1],region=y>.065?'forehead':y<-.075?'jaw':Math.abs(x)<.023?(y<-.02?'lips':'nose'):'cheeks';
@@ -142,7 +153,7 @@ export class FaceDynamics {
   }
   undo(){if(!this.history.length)return false;this.future.push(this.rest.slice());this.rest=this.history.pop();this.resetMotion();return true;}
   redo(){if(!this.future.length)return false;this.history.push(this.rest.slice());this.rest=this.future.pop();this.resetMotion();return true;}
-  resetMotion(){this.offset.fill(0);this.velocity.fill(0);this.impactRig.reset();this.recoil.set(0,0,0);this.recoilVelocity.set(0,0,0);}
+  resetMotion(){this.offset.fill(0);this.velocity.fill(0);this.impactRig.reset();this.speechRig.reset();this.recoil.set(0,0,0);this.recoilVelocity.set(0,0,0);}
   reset(){this.remember();this.rest=this.original.slice();for(const k in this.rig)this.rig[k]=0;this.resetMotion();this.step(0);}
   // Portable editable expression controls in exported glTF. These are heuristic
   // deformation fields, not measured FACS poses or anatomically fitted muscles.

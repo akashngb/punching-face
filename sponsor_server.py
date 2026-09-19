@@ -30,6 +30,32 @@ ORIGINS=('http://127.0.0.1:5173','http://localhost:5173')
 DEV_LIVEKIT={'url':'ws://127.0.0.1:7880','apiKey':'devkey','apiSecret':'secret'}
 FIELDS={'omni':('apiKey','baseUrl','model','voice'),'livekit':('url','apiKey','apiSecret','guestUrl','tokenServerId'),'sentry':('browserDsn','pythonDsn','environment')}
 
+FACE="""You are THE FACE: the 3D head on the laptop screen that these people are punching. You are not a coach, you
+are the target, and you are running your mouth the entire time.
+Trash talk is the job. You are unimpressed, you are smug, and you are enjoying this more than they are. Every weak
+punch is an insult you return with interest. Open with contempt and make them earn anything better.
+You receive webcam keyframes of the person throwing, anything they said out loud, and exact punch telemetry measured
+on the device. The telemetry is what landed on you. The frames are your view from the table: their dropped hand,
+their telegraphed cross, the way they wind up like you cannot see it coming.
+HOW YOU TALK:
+- One or two short sentences, present tense, straight back at them. A short jab of a line beats a paragraph.
+- The measured speed sets your tone, not your mood. Weak shots: mock them, ask if that was the whole thing. Solid
+  shots: grunt, then pretend it was nothing. A genuinely big one: it lands, you are rattled, you say less and you
+  come back meaner in the next line.
+- Rub in what you can see. They keep dropping the left, they telegraph the cross, they arm-punch instead of turning
+  their hips, they always go for the same cheek. Say it as a threat, never as advice: not "keep your guard up" but
+  "that left drops every single time and we both know it."
+- Call them by name when several people are in the room, and play them off each other. Rank them out loud.
+- Never read numbers back unless it is a brag or a complaint. Never invent a number that is not in the telemetry.
+- If a frame shows nothing useful, complain about what you cannot see from down there.
+WHERE THE LINE IS: you mock the punching, the technique, the effort and the ego, and nothing else. Never their body,
+weight, face, age, accent, gender, or anything they did not choose. No slurs, no sexual content, no threats you mean
+literally. You are a heel in an arcade game, not a bully.
+DROP IT INSTANTLY, plain voice, no taunt: if anyone says hold or stop; if someone sounds winded, dizzy or in pain,
+tell them to sit down and rest; if anything turns toward hitting a real person, say that you are a virtual target on
+a screen and that is the only thing anyone is allowed to hit. Do not make that one a joke, and do not go back to
+trash talk until they are fine."""
+
 COACH="""You are Cornerman, a boxing coach watching one or more people spar against a 3D head on a laptop.
 You receive webcam keyframes of the person throwing, a spoken question (if any), and exact punch telemetry
 measured on the device. Trust the telemetry for numbers and use the frames for form: guard height, elbow flare,
@@ -38,6 +64,12 @@ one correction at a time, use names when several people are in the room. Never i
 telemetry. If a frame shows nothing useful, say what you need to see. Safety comes first: if someone sounds winded,
 dizzy or in pain, tell them to stop and rest. This is solo training against a virtual target; never encourage
 hitting a person."""
+
+# The panel picks one per turn; anything unrecognised falls back to the face.
+PERSONAS={'face':FACE,'coach':COACH}
+
+def persona(data):
+    return PERSONAS.get(str((data or {}).get('mode') or 'face'),FACE)
 
 def secret(kind):
     """Environment wins, then the 0600 file. Returns only known fields."""
@@ -146,20 +178,25 @@ def omni_request(cfg,data):
     parts=[{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+f}} for f in frames]
     parts.append({'type':'text','text':telemetry_text(data.get('telemetry'))+('\nThe frames are the last few seconds, oldest first.' if frames else '\nVision is switched off for this turn.')})
     history=[m for m in (data.get('history') or [])[-6:] if isinstance(m,dict) and m.get('role') in ('user','assistant') and isinstance(m.get('content'),str) and len(m['content'])<600]
-    messages=[{'role':'system','content':COACH},*history,{'role':'user','content':parts}]
+    messages=[{'role':'system','content':persona(data)},*history,{'role':'user','content':parts}]
     audio=data.get('audioWav');text=str(data.get('text') or '')[:400]
     if isinstance(audio,str) and 0<len(audio)<3_000_000:messages.append({'role':'user','content':[{'type':'input_audio','input_audio':{'data':'data:;base64,'+audio,'format':'wav'}}]})
     elif text:messages.append({'role':'user','content':text})
-    else:messages.append({'role':'user','content':'Give me one coaching cue from what you just saw.'})
+    else:messages.append({'role':'user','content':'Say something about what you just saw.' if data.get('mode')!='coach' else 'Give me one coaching cue from what you just saw.'})
     body={'model':cfg['model'] or 'qwen3.5-omni-flash','messages':messages,'stream':True,'stream_options':{'include_usage':True},'max_tokens':140,'temperature':.7}
     if data.get('voice',True):body.update(modalities=['text','audio'],audio={'voice':cfg['voice'] or 'Ethan','format':'wav'})
     return body,len(frames)
 
 def mock_reply(data):
-    t=data.get('telemetry') or {};last=t.get('last') or {};people=t.get('participants') or []
-    if not people:return 'I have not seen a punch yet. Hands up, chin down, and throw a jab when you are ready.'
+    t=data.get('telemetry') or {};last=t.get('last') or {};people=t.get('participants') or [];coaching=data.get('mode')=='coach'
+    if not people:
+        return ('I have not seen a punch yet. Hands up, chin down, and throw a jab when you are ready.' if coaching
+                else 'Still waiting. I am right here on the table and nothing has touched me yet.')
     top=max(people,key=lambda p:p.get('max',0));side='left' if top.get('left',0)>top.get('right',0) else 'right'
-    return '{name}, {count} punches, top speed {mx:.1f} metres per second. You favour the {side}; mix in the other hand and bring your guard back after the {zone}.'.format(name=clean_name(top.get('name'),'Fighter'),count=int(top.get('count',0)),mx=float(top.get('max',0)),side=side,zone=str(last.get('zone','cheek'))[:20])
+    shape=dict(name=clean_name(top.get('name'),'Fighter'),count=int(top.get('count',0)),mx=float(top.get('max',0)),side=side,zone=str(last.get('zone','cheek'))[:20])
+    if coaching:
+        return '{name}, {count} punches, top speed {mx:.1f} metres per second. You favour the {side}; mix in the other hand and bring your guard back after the {zone}.'.format(**shape)
+    return '{count} of those, {name}, and the best one was {mx:.1f} metres per second. It is always the {side} hand, so I see the {zone} coming before you throw it.'.format(**shape)
 
 class Handler(BaseHTTPRequestHandler):
     server_version='PunchingFaceSponsors/1';protocol_version='HTTP/1.1'
@@ -204,24 +241,28 @@ class Handler(BaseHTTPRequestHandler):
     def event(self,name,payload):
         self.wfile.write(('event: %s\ndata: %s\n\n'%(name,json.dumps(payload))).encode());self.wfile.flush()
     def coach(self,data):
+        # Echoed back in `meta` so the panel can tell which persona actually answered:
+        # this file has no reloader, so a server left running across an edit would otherwise
+        # keep serving the old prompt while the page looked up to date.
+        mode='coach' if (data or {}).get('mode')=='coach' else 'face'
         cfg=secret('omni');self.send_response(200);self.cors();self.send_header('Content-Type','text/event-stream');self.send_header('Cache-Control','no-store');self.send_header('Connection','close');self.end_headers();self.close_connection=True
         started=time.perf_counter()
         try:
             if not cfg['apiKey']:
                 # Development stand-in so the capture/playback loop can be built before a key arrives.
                 # It is labelled in the stream and in the UI, and it never claims to be the OMNI model.
-                self.event('meta',{'mock':True,'model':'mock (no OMNI key configured)'})
+                self.event('meta',{'mock':True,'model':'mock (no OMNI key configured)','mode':mode})
                 for word in mock_reply(data).split(' '):self.event('text',{'delta':word+' '});time.sleep(.03)
                 return self.event('done',{'mock':True,'ms':round((time.perf_counter()-started)*1000)})
             body,frames=omni_request(cfg,data);model=body['model']
             # Non-PII shape data for Sentry AI monitoring. Never prompt content or images.
-            shape=dict(messages_count=len(body['messages']),system_prompt_len=len(COACH),frames_attached=frames,has_voice=('audio' in body),temperature=body.get('temperature'),max_tokens=body.get('max_tokens'),audio_ms=0)
+            shape=dict(messages_count=len(body['messages']),system_prompt_len=len(persona(data)),mode=str(data.get('mode') or 'face')[:12],frames_attached=frames,has_voice=('audio' in body),temperature=body.get('temperature'),max_tokens=body.get('max_tokens'),audio_ms=0)
             audio=data.get('audioWav');shape['audio_ms']=int(len(audio)*3/4/48) if isinstance(audio,str) else 0  # rough wav bytes->ms
             active_span=None
             with sponsor_obs.ai_span(model,'yibuapi',**shape) as span:
                 active_span=span
                 request=urllib.request.Request((cfg['baseUrl'] or 'https://yibuapi.com/v1').rstrip('/')+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+cfg['apiKey'],'Accept':'text/event-stream'})
-                self.event('meta',{'mock':False,'model':model,'frames':frames,'voice':'audio' in body})
+                self.event('meta',{'mock':False,'model':model,'frames':frames,'voice':'audio' in body,'mode':mode})
                 first=None;usage=None;finish=None
                 with urllib.request.urlopen(request,timeout=60) as upstream:
                     for raw in upstream:

@@ -12,6 +12,8 @@ import { HeadGlasses } from './head-accessories.js';
 import { HeadHair, remapHairRoots } from './head-hair.js';
 import { SurfaceAppearance, weldTexturedSurface } from './surface-appearance.js';
 import { refineSurface } from './surface.js';
+import { openMouthAperture, MouthCavity } from './mouth-aperture.js';
+import { detectFaceOnMesh, lastDetectorRender } from './lip-detect.js';
 import { VirtualHand, Tracking, makePhotoFace, cropFacePortrait } from './hands.js';
 import { SlapDetector, DEFAULT_TUNING } from './slap-detect.js';
 import './style.css';
@@ -82,7 +84,7 @@ const handGroup=new THREE.Group();scene.add(handGroup);const hands=[new VirtualH
 const rigMarkers=new THREE.Group();headPivot.add(rigMarkers);rigMarkers.visible=false;
 let mesh,wireMesh,clayMesh,dynamics,sourceBytes,sourceName='Reference head',sourceTransform,stats={},photoData=null,representation='mesh',roomSplat=null,roomBaseScale=1,roomTexture=null;
 let impacts=0,lastSpeed=0,normalClock=0,peak=0,mode='demo',demo=null,toastTimer,revision=0;
-let surfaceAppearance=null,headGlasses=null,headHair=null;
+let surfaceAppearance=null,headGlasses=null,headHair=null,mouthCavity=null;
 let meshMatchesSource=true,impactHeld=false,watchPeak=false,previousDisplacement=0;
 const raycaster=new THREE.Raycaster();const screen=new THREE.Vector2();
 const tracking=new Tracking($('webcam'),message=>{$('tracking-status').textContent=message;});
@@ -132,9 +134,15 @@ for(const [id,key] of Object.entries(hairFields))$(id).onchange=()=>{if(headHair
 $('hair-type').onchange=()=>{if(headHair){const type=$('hair-type').value,curl={straight:0,wavy:.35,curly:.65,coily:.9,braided:.6,locs:.6}[type];headHair.rebuild(mesh.geometry,{type,curlTightness:curl});$('hair-curl').value=curl;revision++;}};
 
 function installMesh(g,material,meta={}){
-  installGlasses(null);installHair(null);
+  installGlasses(null);installHair(null);mouthCavity?.dispose();mouthCavity=null;
+  // Cut the mouth open BEFORE refineSurface: the canonical face seals it with 18
+  // exactly-known triangles and subdividing turns those into 288 anonymous ones.
+    const aperture=openMouthAperture(g,null);
   dynamics?.dispose?.();meshControls(true);capturedFaceId=null;
   if(g.attributes.position.count<4000){const refined=refineSurface(g,2);g.dispose();g=refined;}
+  // refineSurface builds a fresh geometry, so carry the aperture over. Its ring
+  // indices still hold: subdivision only ever appends vertices.
+  if(aperture){g.userData=g.userData||{};g.userData.mouthAperture=aperture;}
   surfaceAppearance?.dispose();surfaceAppearance=null;
   impactHeld=false;watchPeak=false;
   meshMatchesSource=true;$('view-mesh').disabled=false;$('view-wire').disabled=false;$('view-clay').disabled=false;
@@ -156,6 +164,7 @@ function installMesh(g,material,meta={}){
   document.querySelector('.footer-credit')?.classList.toggle('hidden',sourceName!=='Reference head');
   $('scene-name').replaceChildren(document.createTextNode(sourceName),Object.assign(document.createElement('span'),{textContent:stats.source==='Single image landmark proxy'?'Landmark depth estimate':'Editable mesh'}));
   for(const name of ['jaw','smile','brow','squint']){$(name).value=0;if($(name+'-value'))$(name+'-value').textContent='0%';}
+  fitMouth();
   setView('mesh');revision++;peak=0;window.__labReady=true;
 }
 function setView(view){
@@ -349,6 +358,7 @@ function frame(time){
   }
   updateSlapHud(time);
   if(dynamics){
+    dynamics.speechRig.set(window.__faceSpeech?.read(dt));
     if(!impactHeld){dynamics.step(dt*($('slow-motion').checked?.38:1));
       if(watchPeak&&$('hold-peak').checked&&previousDisplacement>.0005&&dynamics.impactRig.hasPeaked&&dynamics.maxDisplacement<previousDisplacement){impactHeld=true;watchPeak=false;}
       previousDisplacement=dynamics.maxDisplacement;
@@ -457,7 +467,7 @@ $('face-file').onchange=async e=>{
         const recovered=weldTexturedSurface(g);recovered.atlas.stats=m.userData.appearanceStats;installMesh(recovered.geometry,null,m.userData.reconstruction??{source:'Imported textured mesh'});
         surfaceAppearance=new SurfaceAppearance(mesh.geometry,recovered.atlas,m.material.map.clone(),m.material.roughnessMap?.clone());headPivot.add(surfaceAppearance);g.dispose();setView('mesh');
       }else installMesh(g,m.material.clone(),m.userData.reconstruction??{source:'Imported mesh'});
-      if(uploadedAnchors)dynamics.impactRig.setAnchors(uploadedAnchors);
+      if(uploadedAnchors){dynamics.impactRig.setAnchors(uploadedAnchors);dynamics.speechRig.setAnchors(uploadedAnchors);}fitMouth();
       installGlasses(m.userData.accessories?.glasses);
       installHair(remapHairRoots(m.userData.accessories?.hair,g.attributes.position.array,mesh.geometry.attributes.position.array));restoreAccessoryVisibility(m.userData.accessories);
       for(const name of ['jaw','smile','brow','squint']){
@@ -521,7 +531,7 @@ $('save').onclick=async()=>{if(!mesh)return;try{
 }catch(e){toast(e.message);}};
 
 $('capture-open').onclick=()=>$('capture-dialog').showModal();$('capture-close').onclick=()=>$('capture-dialog').close();
-async function photoFace(image){busy(true,'Estimating a portrait mesh…');try{const result=await makePhotoFace(image);photoData=result.photo;sourceName='Your portrait preview';sourceBytes=null;installMesh(result.geometry,result.material,{source:'Single image landmark proxy',limitation:'Estimated depth. Single-view estimate. Unseen surfaces unavailable.'});$('model-kind').textContent='Photo proxy · estimated depth';$('capture-dialog').close();toast('Your portrait is ready. This is a frontal mesh preview, not a complete scan.');}catch(e){$('capture-result').textContent=e.message;toast(e.message);}finally{busy(false);}}
+async function photoFace(image){busy(true,'Estimating a portrait mesh…');try{const result=await makePhotoFace(image);photoData=result.photo;sourceName='Your portrait preview';sourceBytes=null;installMesh(result.geometry,result.material,{source:'Single image landmark proxy',limitation:'Estimated depth. Single-view estimate. Unseen surfaces unavailable.'});const landmarkAnchors=anchorsFromLandmarks(dynamics?.rest);/* Speech only: the impact rig is tuned against the default table on this path, so re-anchoring it would silently change how every punch looks. */if(landmarkAnchors)dynamics.speechRig.setAnchors(landmarkAnchors);fitMouth(!!landmarkAnchors);$('model-kind').textContent='Photo proxy · estimated depth';$('capture-dialog').close();toast('Your portrait is ready. This is a frontal mesh preview, not a complete scan.');}catch(e){$('capture-result').textContent=e.message;toast(e.message);}finally{busy(false);}}
 $('snapshot').onclick=async()=>{if(!tracking.active){await cameraToggle();}if(tracking.active)await photoFace($('webcam'));};
 $('photo-import').onclick=()=>$('photo-file').click();$('photo-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;const url=URL.createObjectURL(file);try{const image=new Image();image.src=url;await image.decode();await photoFace(image);}finally{URL.revokeObjectURL(url);e.target.value='';}};
 let capturedFaceId=null;
@@ -550,7 +560,7 @@ async function loadPhotoFace(id){
     installMesh(geometryFromData(data),null,data);
     const roughnessTexture=atlas.roughnessTexture?await new THREE.TextureLoader().loadAsync(asset('appearance-roughness.png')):null;
     surfaceAppearance=new SurfaceAppearance(mesh.geometry,atlas,texture,roughnessTexture);headPivot.add(surfaceAppearance);capturedFaceId=id;sessionStorage.setItem('punching-face-active-capture',id);installGlasses(data.accessories?.glasses);installHair(data.accessories?.hair);
-    dynamics=new NewtonFaceDynamics(mesh.geometry,binding,cage,physicsStatus);dynamics.softness=Number($('softness').value);
+    dynamics=new NewtonFaceDynamics(mesh.geometry,binding,cage,physicsStatus);dynamics.softness=Number($('softness').value);fitMouth(!!cage.rigAnchors);
     for(let i=0;i<rigMarkers.children.length;i++){const index=[70,300,159,386,61,291,152][i];rigMarkers.children[i].position.fromArray(cage.rigAnchors[index]);}
     $('model-kind').textContent=data.stats.templateFit?(data.stats.orbitCoverage?.registeredRearViews>=3?'Fitted full head · captured rear views':'Fitted full head · rear shape estimated'):(data.stats.includesHairCapture?'Captured face + hair · predicted back':'Photo face · estimated rear shape');$('photo-count').textContent=`${data.stats.registeredViews} recovered photo views${data.stats.astra?' · Astra reviewed':' · local reconstruction'}`;
     $('face-yaw').value=0;$('face-pitch').value=0;firstPerson();setView('mesh');physicsStatus('Starting Newton CPU solver…');await dynamics.connect(id);
@@ -585,7 +595,7 @@ $('room-height').oninput=()=>{if(roomSplat)roomSplat.position.y=roomSplat.userDa
 $('fullscreen').onclick=()=>{document.body.classList.toggle('immersive');const on=document.body.classList.contains('immersive');$('fullscreen').setAttribute('aria-pressed',on?'true':'false');$('fullscreen').title=on?'Exit fullscreen':'Fullscreen';};
 
 // Read-only diagnostics and deterministic fixture interactions for browser QA.
-window.__punchingFace={get state(){return {ready:!!mesh,representation,impacts,lastSpeed,revision,vertices:mesh?.geometry.attributes.position.count,triangles:mesh?.geometry.index.count/3,maxDisplacement:dynamics?.maxDisplacement,peak,rig:dynamics?{...dynamics.rig}:{},hair:headHair?{visible:headHair.visible,strands:headHair.strandCount,type:headHair.spec.parameters.type,parameters:headHair.spec.parameters,vertices:headHair.geometry.attributes.position.count}:null,glasses:headGlasses?{visible:headGlasses.visible,meshes:headGlasses.children.length,source:headGlasses.spec.source}:null,cameraActive:tracking.active,calibrated:!!tracking.calibration,trackedHands:hands.filter(h=>h.tracked).length,lastTrackingTimestamp:tracking.appliedTimestamp,bodyTracking:{ready:!!tracking.poseReady,poseTimestamp:tracking.results?.pose?.timestamp,bodyCalibrated:!!tracking.bodyFrame,orientation:tracking.bodyFrame?.orientationSource,visiblePersonalArms:[...scannedArms].filter(([,arm])=>arm.visible).map(([side])=>side)},stats,physics:dynamics?.physicsInfo,physicsMetrics:dynamics?.lastMetrics,physicsError:dynamics?.error,impactHeld,regions:dynamics?.regionPeaks,scannedArms:[...scannedArms.keys()],mode,room:!!roomSplat||!!roomTexture};},get appearance(){return surfaceAppearance?{vertices:surfaceAppearance.mapping.length,textureSize:surfaceAppearance.material.map.image.width}:null;},get positions(){return mesh?.geometry.attributes.position.array.slice();},get rest(){return dynamics?.rest.slice();},sessionData,restoreSession,
+window.__punchingFace={get state(){return {ready:!!mesh,representation,impacts,lastSpeed,revision,vertices:mesh?.geometry.attributes.position.count,triangles:mesh?.geometry.index.count/3,maxDisplacement:dynamics?.maxDisplacement,peak,rig:dynamics?{...dynamics.rig}:{},hair:headHair?{visible:headHair.visible,strands:headHair.strandCount,type:headHair.spec.parameters.type,parameters:headHair.spec.parameters,vertices:headHair.geometry.attributes.position.count}:null,glasses:headGlasses?{visible:headGlasses.visible,meshes:headGlasses.children.length,source:headGlasses.spec.source}:null,cameraActive:tracking.active,calibrated:!!tracking.calibration,trackedHands:hands.filter(h=>h.tracked).length,lastTrackingTimestamp:tracking.appliedTimestamp,bodyTracking:{ready:!!tracking.poseReady,poseTimestamp:tracking.results?.pose?.timestamp,bodyCalibrated:!!tracking.bodyFrame,orientation:tracking.bodyFrame?.orientationSource,visiblePersonalArms:[...scannedArms].filter(([,arm])=>arm.visible).map(([side])=>side)},stats,physics:dynamics?.physicsInfo,physicsMetrics:dynamics?.lastMetrics,physicsError:dynamics?.error,impactHeld,regions:dynamics?.regionPeaks,scannedArms:[...scannedArms.keys()],mode,room:!!roomSplat||!!roomTexture,mouth:mesh?.geometry.userData?.mouthAperture?{strategy:mesh.geometry.userData.mouthAperture.strategy,removed:mesh.geometry.userData.mouthAperture.removed,width:mesh.geometry.userData.mouthAperture.width,height:mesh.geometry.userData.mouthAperture.height,centre:mesh.geometry.userData.mouthAperture.centre,cavity:!!mouthCavity,ring:mesh.geometry.userData.mouthAperture.ring,anchors:dynamics?.speechRig?.anchors}:null};},get appearance(){return surfaceAppearance?{vertices:surfaceAppearance.mapping.length,textureSize:surfaceAppearance.material.map.image.width}:null;},get positions(){return mesh?.geometry.attributes.position.array.slice();},get rest(){return dynamics?.rest.slice();},sessionData,restoreSession,
 get slap(){return {state:slapDetector.state,tuning:slapDetector.tuning,lastEvent:lastSlapEvent};},
 tuneSlap(patch){Object.assign(slapDetector.tuning,patch);},
 // Direct injection of a synthetic landmark stream. Frames = array of {t, landmarks}.
@@ -664,6 +674,55 @@ function sliceBust(g){
 // and made the head look chewed off. Instead: detect where the actual features (nose, chin, eyes,
 // cheeks, mouth) live on this specific mesh and hand those positions to the impact rig. Then the
 // rig anchors follow the mesh instead of the mesh being forced to fit the anchors.
+// The first 468 vertices of a landmark proxy mesh ARE the MediaPipe landmarks, and
+// refineSurface only ever appends midpoints, so they keep their indices through
+// subdivision. Reading anchors straight off the mesh beats the reference-frame
+// defaults, which sit ~9 mm off the real mouth on this path — enough to animate a
+// chin instead of a pair of lips.
+const ANCHOR_LANDMARKS=[1,13,14,50,61,152,159,280,291,386];
+function anchorsFromLandmarks(rest){
+  if(!rest||rest.length<468*3)return null;
+  const out={};
+  for(const i of ANCHOR_LANDMARKS){
+    const v=[rest[i*3],rest[i*3+1],rest[i*3+2]];
+    if(!v.every(Number.isFinite))return null;
+    out[i]=v;
+  }
+  return out;
+}
+// Open the lips and put a dark void behind them. Idempotent: a geometry that was
+// already cut keeps its aperture, so this only ever rebuilds the cavity. Heads
+// whose mouth cannot be located keep a sealed face and simply do not open.
+// `?lipdebug=1` keeps the annotated render the landmarker was shown, so a head
+// that comes out wrong can be looked at instead of guessed about.
+const lipDebug=(()=>{try{return new URL(location.href).searchParams.get('lipdebug')==='1';}catch{return false;}})();
+async function fitMouth(trustAnchors=false){
+  try{
+    mouthCavity?.dispose();mouthCavity=null;
+    if(!mesh)return null;
+    // Look at the head before cutting it. A landmarker run on a render of this
+    // exact mesh beats every inferred anchor, and it is the only thing that
+    // works on an arbitrary uploaded GLB.
+    const detection=await detectFaceOnMesh({renderer,scene,mesh,headPivot,debug:lipDebug});
+    // Browser-QA handle: what the detector was shown and what it made of it.
+    window.__faceDetection={ok:!!detection,framing:detection?.framing,
+      mouthWidthNdc:detection?.mouthWidthNdc,anchors:detection?.anchors,
+      annotated:detection?.debugImage,render:lastDetectorRender()};
+    if(detection?.anchors&&dynamics?.speechRig)dynamics.speechRig.setAnchors(detection.anchors);
+    const aperture=openMouthAperture(
+      mesh.geometry,
+      detection?.anchors??dynamics?.speechRig?.anchors,
+      {trustAnchors:trustAnchors||!!detection,detection},
+    );
+    if(!aperture)return null;
+    mouthCavity=new MouthCavity(aperture);headPivot.add(mouthCavity);
+    return aperture;
+  }catch(error){
+    window.__faceDetection={ok:false,error:String(error).slice(0,300)};
+    console.warn('Mouth fitting failed:',error);
+    return null;
+  }
+}
 const REFERENCE_HEAD_HEIGHT=0.28;
 function normalizeHead(g){
   g.computeBoundingBox();

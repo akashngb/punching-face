@@ -16,6 +16,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
     if(binding.indices.some(v=>!Number.isInteger(v)||v<0||v>=468)||binding.weights.some(v=>!Number.isFinite(v)||v<0||v>1))throw new Error('Invalid face cage weights.');
     this.anchors=cage.rigAnchors;
     this.impactRig.setAnchors(this.anchors);
+    this.speechRig.setAnchors(this.anchors);
   }
   async connect(id){
     try{const result=await request('open',{id,softness:this.softness,client:physicsClient()});this.session=result.session;this.physicsInfo=result;if(this.disposed){await this.dispose();return;}this.ready=true;this.onStatus?.(`Newton ${result.version} · CPU · ${result.tetrahedra.toLocaleString()} tetrahedra`);}
@@ -48,6 +49,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
   }
   step(dt){
     this.impactRig.step(dt);
+    this.speechRig.step(dt,this.speechDuck);
     const rigKey=JSON.stringify(this.rig)+':'+this.softness;if(rigKey!==this.lastPose){this.lastPose=rigKey;this.version=(this.version||0)+1;this.poseDirty=true;this.offset.fill(0);this.targetOffset.fill(0);}
     this.accumulated+=dt;
     if(this.ready&&!this.inflight&&this.accumulated>=1/60){const elapsed=Math.min(this.accumulated,1/30);this.accumulated=0;void this.advance(elapsed);}
@@ -55,7 +57,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
     for(const k in this.regionPeaks)this.regionPeaks[k]=0;
     for(let i=0;i<p.length;i+=3){
       const r=this.rigDelta(this.rest[i],this.rest[i+1],this.rest[i+2]);
-      for(let j=0;j<3;j++){this.offset[i+j]+=(this.targetOffset[i+j]-this.offset[i+j])*blend;p[i+j]=this.rest[i+j]+r[j]+this.offset[i+j]+this.impactRig.offset[i+j];}
+      for(let j=0;j<3;j++){this.offset[i+j]+=(this.targetOffset[i+j]-this.offset[i+j])*blend;p[i+j]=this.rest[i+j]+r[j]+this.offset[i+j]+this.impactRig.offset[i+j]+this.speechRig.offset[i+j];}
       const d=Math.hypot(this.offset[i]+this.impactRig.offset[i],this.offset[i+1]+this.impactRig.offset[i+1],this.offset[i+2]+this.impactRig.offset[i+2]);this.maxDisplacement=Math.max(this.maxDisplacement,d);
       const x=this.rest[i],y=this.rest[i+1],region=y>.05?'forehead':y<-.075?'jaw':Math.abs(x)<.024?(y<-.02?'lips':'nose'):'cheeks';this.regionPeaks[region]=Math.max(this.regionPeaks[region],d);
     }

@@ -194,7 +194,7 @@ export class Tracking {
 }
 
 let faceDetector;
-async function ensureFaceDetector(){
+export async function ensureFaceDetector(){
   if(!faceDetector){const files=await FilesetResolver.forVisionTasks('/wasm');faceDetector=await FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'/models/face_landmarker.task',delegate:'CPU'},runningMode:'IMAGE',numFaces:1});}
   return faceDetector;
 }

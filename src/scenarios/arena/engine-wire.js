@@ -15,8 +15,8 @@ import {FallbackSession} from '../../omni/fallback.js';
 import {EventBus, formatEvent} from '../../omni/events.js';
 import {ToolRegistry} from '../../omni/tools.js';
 import {ContactClassifier, arenaRegions} from '../../contact/classifier.js';
-import {play as playReaction, keyForEvent, warmUp} from '../../omni/reactions.js';
-import {registerArenaTools, arenaPersona} from './tools.js';
+import {play as playReaction, keyForEvent, warmUp, ARENA_KEYS} from '../../omni/reactions.js';
+import {registerArenaTools, personaFor} from './tools.js';
 
 const FLAG_KEY = 'contact-sponsors-arena-omni';
 
@@ -66,7 +66,9 @@ export function startArenaOmni({stats, punchingFace = null, uiLog = null} = {}) 
       session.sendEngineEvent(event, formatEvent(event));
       const key = keyForEvent(event);
       if (key) playReaction(key);
-      if (event.type === 'strike') session.requestResponse('React briefly with react_to_hit and one line in character.');
+      if (event.type === 'strike') session.requestResponse(mode === 'coach'
+        ? 'They landed that one. One short corrective cue, and coach_callout if you saw a flaw.'
+        : 'You just got hit. Call react_to_hit, then one short line in character.');
     },
   });
 
@@ -85,11 +87,14 @@ export function startArenaOmni({stats, punchingFace = null, uiLog = null} = {}) 
     });
   }, 33);
 
-  session.configure({persona: arenaPersona(), tools: registry.schemas()});
+  // Same selector the sponsor panel writes, so one choice drives both paths.
+  let mode = 'face';
+  try { mode = localStorage.getItem('punching-face-sponsors-mode') || 'face'; } catch { /* no localStorage */ }
+  session.configure({persona: personaFor(mode), tools: registry.schemas()});
   session.addEventListener('tool.call', event => registry.dispatch(event.detail));
   session.connect().catch(err => uiLog?.('warn', 'arena omni: ' + err.message));
 
-  warmUp(['arena.grunt.low', 'arena.grunt.mid', 'arena.grunt.high', 'arena.tap']);
+  warmUp(ARENA_KEYS);
 
   return {
     dispose() { clearInterval(poll); session.disconnect(); classifier.dispose(); },

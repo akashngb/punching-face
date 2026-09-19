@@ -16,8 +16,8 @@ const remember=(key,value)=>{try{if(value===undefined)return localStorage.getIte
 async function loadConfig(){const response=await fetch(API+'/sponsors/config');if(!response.ok)throw new Error('Sponsor service error.');config=await response.json();return config;}
 
 const dock=document.createElement('div');dock.id='sponsor-dock';dock.className=remember('open')==='1'?'':'collapsed';
-dock.innerHTML=`<button class="sd-pill"><i class="sd-dot" data-d="coach" title="OMNI coach"></i><i class="sd-dot" data-d="arena" title="LiveKit arena"></i><i class="sd-dot" data-d="obs" title="Sentry"></i><span>Cornerman · Arena</span></button>
-  <div class="sd-body"><div class="sd-tabs"><button data-tab="coach">Cornerman</button><button data-tab="arena">Arena</button></div>
+dock.innerHTML=`<button class="sd-pill"><i class="sd-dot" data-d="coach" title="OMNI face"></i><i class="sd-dot" data-d="arena" title="LiveKit arena"></i><i class="sd-dot" data-d="obs" title="Sentry"></i><span>The Face · Arena</span></button>
+  <div class="sd-body"><div class="sd-tabs"><button data-tab="coach">The Face</button><button data-tab="arena">Arena</button></div>
   <section data-panel="coach"></section><section data-panel="arena"></section></div>`;
 document.body.append(dock);
 const pill=dock.querySelector('.sd-pill'),dots=Object.fromEntries([...dock.querySelectorAll('[data-d]')].map(n=>[n.dataset.d,n]));
@@ -26,7 +26,7 @@ function show(tab){for(const b of dock.querySelectorAll('[data-tab]'))b.classLis
 for(const b of dock.querySelectorAll('[data-tab]'))b.onclick=()=>show(b.dataset.tab);
 
 function offline(){
-  dock.querySelector('[data-panel=coach]').innerHTML=`<div class="sd-status">Sponsor services are not running, so the coach and the arena are off. The rest of PUNCHING FACE is unaffected.</div>
+  dock.querySelector('[data-panel=coach]').innerHTML=`<div class="sd-status">Sponsor services are not running, so the face and the arena are off. The rest of PUNCHING FACE is unaffected.</div>
     <div class="sd-status">Start them with <code>npm run sponsors</code>, then:</div><div class="sd-row"><button class="primary" data-k="retry" style="flex:1">Retry</button></div>`;
   dock.querySelector('[data-k=retry]').onclick=start;dots.coach.className=dots.arena.className='sd-dot warn';show('coach');
 }
@@ -39,8 +39,11 @@ async function start(){
   }
   dots.obs.className='sd-dot'+(obs.enabled?' on':'');dots.obs.title=obs.enabled?'Sentry: tracing, logs and replay are on (webcam and 3D canvas are never recorded)':'Sentry: no DSN configured';
   const shared={api:API,config:()=>config,stats,refreshConfig:loadConfig};
-  const coach=createCornerman({...shared,panel:dock.querySelector('[data-panel=coach]')});
-  // One place records a landed punch, whoever threw it: stats first, then the coach and the room hear about it.
+  const tabButton=dock.querySelector('[data-tab=coach]'),pillLabel=pill.querySelector('span');
+  const coach=createCornerman({...shared,panel:dock.querySelector('[data-panel=coach]'),
+    // The panel owns which voice is talking; the dock just mirrors the name.
+    onMode:name=>{tabButton.textContent=name;pillLabel.textContent=name+' · Arena';}});
+  // One place records a landed punch, whoever threw it: stats first, then the face and the room hear about it.
   const record=(contact,who)=>{
     seen=contact.time;const triggers=stats.add({id:who.id,name:who.name,speed:contact.speed,point:contact.point,side:who.side,time:performance.now()});
     const event={...stats.last};coach.onPunch(triggers);arena.onPunch(event);return event;

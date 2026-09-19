@@ -87,16 +87,22 @@ Full challenge details: <https://github.com/cari-waterloo-rc/OMNI-Live-Build-the
 
 ## 2. Why Arena uses OMNI
 
-Arena is a live boxing partner. Your hands are busy and your eyes are on the target, so **voice + vision is the only viable interface** during a round.
+Arena is the head you are punching, given a voice. It is the target, not a coach. Your hands are busy and your eyes are on it, so **voice + vision is the only viable interface** during a round.
 
 | Modality | Arena use |
 | --- | --- |
-| Vision (video frames) | Stance, dropped guard, telegraphed punches |
-| Speech in (voice) | "hold on", trash-talk, breathing, questions between rounds |
-| Speech out | Grunts, taunts, coaching callouts |
-| Language | Opponent persona, round summary |
+| Vision (video frames) | What the face sees coming: stance, dropped guard, telegraphed punches |
+| Speech in (voice) | "hold on", trash-talk it answers, breathing, questions between rounds |
+| Speech out | Grunts on impact, taunts between exchanges, flaws called out as threats |
+| Language | The face's persona (`arenaPersona()`, `FACE` in `sponsor_server.py`), round summary |
 
-A chatbot can't see your guard drop. A vision-only model can't answer "how did I look on that combo?" OMNI's streaming, interruptible loop closes that gap.
+Two personas ship, picked from a selector at the top of the panel and sent as `mode` on every turn:
+**face** (default) is the head talking back and trash-talking; **coach** is the original cornerman calling
+corrections. Only the system prompt and the labels change — same transport, same tools, same telemetry.
+The choice is remembered in `localStorage['punching-face-sponsors-mode']`, which the shared-engine Arena
+reads too (`personaFor()` in `src/scenarios/arena/tools.js`), so one selector drives both paths.
+
+A chatbot can't see your guard drop. A vision-only model can't answer back when you hit it. OMNI's streaming, interruptible loop closes that gap.
 
 ---
 
