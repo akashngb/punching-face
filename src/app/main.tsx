@@ -64,9 +64,11 @@ function AppShell() {
       customizeContactResponse(right);
       bakeBeatMeButton();
       addHeaderLogo();
-      removeRoomSection(left);
+      hideRoomSection(left);
       autoCalibrateOnCameraConnect(left);
-      stageShell?.querySelector<HTMLElement>('.stage-top')?.remove();
+      // The loader and tracking loop still update these status elements.
+      const stageTop = stageShell?.querySelector<HTMLElement>('.stage-top');
+      if (stageTop) stageTop.style.display = 'none';
       swapViewSwitch(stageShell);
       installImmersiveKeys();
     })();
@@ -219,14 +221,9 @@ function customizeContactResponse(rightPanel: HTMLElement | null) {
   const peakRow = compressionEl?.closest<HTMLElement>('.controls-label');
   if (peakRow) peakRow.style.display = 'none';
 
-  // Drop the Left/Right hook click buttons — Q/E keyboard shortcuts still fire
-  // the same hook() function (main.js:1543-1544).
-  const leftHook = rightPanel.querySelector('#left-hook');
-  const rightHook = rightPanel.querySelector('#right-hook');
-  const hookRow = leftHook?.closest('.row');
-  leftHook?.remove();
-  rightHook?.remove();
-  if (hookRow && !hookRow.children.length) hookRow.remove();
+  // Hide the hook buttons, but retain them for meshControls() and Q/E input.
+  const hookRow = rightPanel.querySelector('#left-hook')?.closest<HTMLElement>('.row');
+  if (hookRow) hookRow.style.display = 'none';
 }
 
 function bakeBeatMeButton() {
@@ -244,7 +241,8 @@ function bakeBeatMeButton() {
     btn.classList.remove('small');
     btn.classList.add('primary');
   }
-  document.getElementById('capture-open')?.remove();
+  const captureOpen = document.getElementById('capture-open');
+  if (captureOpen) captureOpen.style.display = 'none';
 }
 
 // Replace the vanilla Surface/Geometry/Wireframe .view-switch with the
@@ -264,9 +262,14 @@ function swapViewSwitch(stageShell: HTMLElement | null | undefined) {
   );
   const defaultTab = buttons.find((b) => b.classList.contains('active'))?.id ?? tabs[0].id;
 
-  box.innerHTML = '';
+  // Keep the original IDs and handlers alive for installMesh() and setView().
+  const originalControls = document.createElement('div');
+  originalControls.style.display = 'none';
+  originalControls.append(...buttons);
+  const tabsMount = document.createElement('div');
+  box.replaceChildren(originalControls, tabsMount);
   box.classList.add('view-switch-react');
-  createRoot(box).render(
+  createRoot(tabsMount).render(
     <AnimatedTabs
       tabs={tabs}
       defaultTab={defaultTab}
@@ -276,7 +279,7 @@ function swapViewSwitch(stageShell: HTMLElement | null | undefined) {
 }
 
 // After the user connects the webcam, wait for cameraActive to flip true,
-// then trigger calibration once and remove the now-redundant Calibrate +
+// then trigger calibration once and hide the now-redundant Calibrate +
 // Scan my arms buttons so the left sidebar stays scroll-free.
 function autoCalibrateOnCameraConnect(leftPanel: HTMLElement | null | undefined) {
   const calibrate = document.getElementById('calibrate') as HTMLButtonElement | null;
@@ -294,7 +297,8 @@ function autoCalibrateOnCameraConnect(leftPanel: HTMLElement | null | undefined)
       done = true;
       window.setTimeout(() => calibrate.click(), 250);
       window.setTimeout(() => {
-        calibrate.remove();
+        // cameraToggle() still updates this control when disconnecting.
+        calibrate.style.display = 'none';
         clearInterval(id);
       }, 750);
     }
@@ -327,13 +331,13 @@ function installImmersiveKeys() {
   });
 }
 
-function removeRoomSection(leftPanel: HTMLElement | null | undefined) {
+function hideRoomSection(leftPanel: HTMLElement | null | undefined) {
   if (!leftPanel) return;
   leftPanel
     .querySelectorAll<HTMLElement>(':scope > section.panel-section')
     .forEach((section) => {
       const h2 = section.querySelector('h2');
-      if (h2 && h2.textContent?.trim() === 'Room') section.remove();
+      if (h2 && h2.textContent?.trim() === 'Room') section.style.display = 'none';
     });
 }
 

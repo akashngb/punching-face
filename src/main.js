@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { importedHeadGeometry } from './imported-head.js';
 import { NewtonFaceDynamics } from './newton-dynamics.js';
 import { FaceDynamics, clamp, sweptEllipsoid } from './physics.js';
 import { ImpactReferences } from './impact-references.js';
@@ -650,8 +651,10 @@ function meshControls(available) {
     'save',
     'hold-peak',
     'resume-impact',
-  ])
-    $(id).disabled = !available;
+  ]) {
+    const control = $(id);
+    if (control) control.disabled = !available;
+  }
 }
 
 function geometryFromData(data) {
@@ -1748,8 +1751,7 @@ $('face-file').onchange = async (e) => {
         toast(
           `GLB has ${faces.length} meshes; using the largest (${m.name || 'unnamed'}) as the face surface.`,
         );
-      const g = m.geometry.clone();
-      g.applyMatrix4(m.matrixWorld);
+      const g = importedHeadGeometry(m);
       if (m.userData.coordinateSystem !== 'punching-face-head-metres-v1') {
         normalizeHead(g);
       }
@@ -1757,9 +1759,10 @@ $('face-file').onchange = async (e) => {
       photoData = null;
       sourceBytes = null;
       const uploadedAnchors =
-        m.userData.coordinateSystem === 'punching-face-head-metres-v1'
+        m.userData.rigAnchors ??
+        (m.userData.coordinateSystem === 'punching-face-head-metres-v1'
           ? null
-          : detectAnchors(g);
+          : detectAnchors(g));
       if (m.material.map && m.userData.appearance) {
         const recovered = weldTexturedSurface(g);
         recovered.atlas.stats = m.userData.appearanceStats;
@@ -2861,8 +2864,7 @@ async function loadMeshyGLB(bytes) {
             ? b
             : a,
         );
-  const g = m.geometry.clone();
-  g.applyMatrix4(m.matrixWorld);
+  const g = importedHeadGeometry(m);
   normalizeHead(g);
   sourceName = 'Your Meshy head';
   photoData = null;
