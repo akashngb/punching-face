@@ -52,7 +52,7 @@ document.querySelector('#app').innerHTML=`
 <section class="panel-section"><div class="row"><button id="reset" class="small">Reset face</button><button id="export" class="small primary">Export GLB ↗</button></div><button id="save" class="small full" style="margin-top:7px">Save editable session</button><details><summary>Reconstruction evidence</summary><div id="stats-detail"></div></details></section></aside></main>
 <dialog id="capture-dialog"><button class="close" id="capture-close" aria-label="Close capture guide">×</button><span class="eyebrow">Bring yourself into the scene</span><h1>Capture a face. Then a room.</h1><div class="capture-grid"><div class="capture-card"><h2>Try your face now</h2><p class="muted">A frontal image becomes a textured landmark mesh. Fast likeness preview; estimated depth and no back of head. Use Record for multiview geometry.</p><button id="snapshot" class="full primary">Use webcam portrait</button><button id="photo-import" class="full small" style="margin-top:9px">↑ Choose a face photo</button><input id="photo-file" type="file" accept="image/*"></div><div class="capture-card"><h2>Scan for fidelity</h2><p class="muted">Keep a neutral expression and even light. Have a helper move a phone around your still head, including both profiles, ears, chin, and crown. Keep overlapping views.</p><button id="record" class="full">Record a face scan</button><p class="muted">Saves face photographs, recovers camera angles, builds a connected mesh and bakes the captured texture. Astra supplies modeling advice; Newton simulates tissue contact.</p></div><div class="capture-card"><h2>Bring your own head</h2><p class="muted">Skip capture. Upload a GLB head or bust from Sketchfab, Meshy, Ready Player Me, Blender, etc. The mesh is auto-scaled and wired into the impact rig.</p><button id="glb-import" class="full primary">↑ Upload a GLB head</button><p class="muted">Multi-part meshes (hair, eyes, teeth as separate objects) are supported: the largest surface becomes the interactive face. Y-up, facing +Z works best.</p></div></div><ol><li>Capture 60–150 overlapping sharp face images with fixed exposure. A multiview capture is needed to preserve unseen features.</li><li>Press Create 3D face. Inspect Geometry and Wireframe to check depth. Gray areas mark estimated, unseen head surfaces.</li><li>Import a 360° room panorama for the surrounding view. A panorama supplies rotation only; it does not measure room depth.</li></ol><p class="note">Your laptop camera drives virtual hand articulation. A room scan supplies novel background views; it cannot reveal your hands’ hidden surfaces. Capture each arm separately to reconstruct its appearance. Monocular depth and automatic rigging remain estimates.</p><div id="capture-result" class="muted" role="status"></div></dialog>`;
 
-const scene=new THREE.Scene();scene.background=new THREE.Color('#f6f7f2');scene.fog=new THREE.Fog('#f6f7f2',3,9);
+const scene=new THREE.Scene();scene.background=new THREE.Color('#ffffff');scene.fog=new THREE.Fog('#ffffff',3,9);
 const camera=new THREE.PerspectiveCamera(50,1,.01,30);camera.position.set(0,0,0);
 const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance',preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;
@@ -64,18 +64,9 @@ const key=new THREE.DirectionalLight(0xfff2e0,2.4);key.position.set(-1,1.6,1);sc
 const rim=new THREE.DirectionalLight(0xe4e9ff,1.3);rim.position.set(.8,.4,-1.3);scene.add(rim);
 const fill=new THREE.DirectionalLight(0xffffff,.9);fill.position.set(.7,0,1);scene.add(fill);
 const studio=new THREE.Group();scene.add(studio);
-// Lightweight white room: four flush surfaces + subtle gridlines etched into
-// the floor and each wall. Clear 3D volume, near-zero scene weight.
-function panel(x,y,z,sx,sy,sz){const o=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),new THREE.MeshStandardMaterial({color:0xfafbf6,roughness:1}));o.position.set(x,y,z);studio.add(o);return o;}
-panel(0,-1.28,-1,8,.02,8);
-panel(0,.6,-3.3,8,4,.02);
-panel(-2.3,.6,-.6,.02,4,6);
-panel(2.3,.6,-.6,.02,4,6);
-function wallGrid(size,divisions,rotX,rotZ,px,py,pz){const g=new THREE.GridHelper(size,divisions,0x4a5548,0x8b948a);g.material.transparent=true;g.material.opacity=.9;g.material.depthWrite=false;g.rotation.set(rotX,0,rotZ);g.position.set(px,py,pz);studio.add(g);return g;}
-wallGrid(8,32,0,0,0,-1.268,-1);
-wallGrid(8,32,Math.PI/2,0,0,.6,-3.28);
-wallGrid(6,24,0,Math.PI/2,-2.28,.6,-.6);
-wallGrid(6,24,0,Math.PI/2,2.28,.6,-.6);
+// Kept as an empty group so panorama upload (resetRoom / studio.visible)
+// keeps working; the visible white-room walls + wallGrid are removed for a
+// clean B&W backdrop behind the head.
 const target=new THREE.Group();target.position.set(0,.015,-.55);scene.add(target);
 const headPivot=new THREE.Group();target.add(headPivot);
 const handGroup=new THREE.Group();scene.add(handGroup);const hands=[new VirtualHand(-1),new VirtualHand(1)];hands.forEach(h=>handGroup.add(h));
@@ -562,7 +553,7 @@ const faceCapture=new FaceCapture(loadPhotoFace,async id=>{if(capturedFaceId===i
 function openFaceScan(){if(tracking.active)cameraToggle();$('capture-dialog').close();faceCapture.open().catch(e=>toast(e.message));}
 $('scan-face').onclick=openFaceScan;$('record').onclick=openFaceScan;
 
-function resetRoom(){if(roomSplat){roomSplat.removeFromParent();roomSplat.dispose();roomSplat=null;}roomTexture?.dispose();roomTexture=null;scene.background=new THREE.Color('#f6f7f2');studio.visible=true;scene.fog=new THREE.Fog('#f6f7f2',3,9);$('room-label').textContent='Studio environment · placeholder';$('room-fields').classList.remove('active');}
+function resetRoom(){if(roomSplat){roomSplat.removeFromParent();roomSplat.dispose();roomSplat=null;}roomTexture?.dispose();roomTexture=null;scene.background=new THREE.Color('#ffffff');studio.visible=true;scene.fog=new THREE.Fog('#ffffff',3,9);$('room-label').textContent='Studio environment · placeholder';$('room-fields').classList.remove('active');}
 $('reset-room').onclick=resetRoom;$('import-room').onclick=()=>$('room-file').click();
 $('room-file').onchange=async e=>{
   const file=e.target.files[0];if(!file)return;e.target.value='';busy(true,'Loading room context…');
