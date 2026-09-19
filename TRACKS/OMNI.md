@@ -151,10 +151,6 @@ Every API call is recorded to a JSONL ledger at `.local/usage/yibu_api_calls.jso
 
 Records include the call id, timestamps, model, key suffix (last 4 chars only, never the full key), purpose, endpoint, transport, ok/fail, latency, and token counts.
 
-The ledger is a **local file per machine**. Whoever compiles the submission must collect the other
-laptops' copies and pass them to `npm run omni:report -- <path> <path>`, which merges and de-duplicates
-by `call_id`; otherwise the totals silently cover one machine only.
-
 Before submitting, run `npm run omni:report`, inspect the outputs, and reply to the approval email with **only** `usage_summary.json` and `usage_by_model_key_purpose.csv` attached. Never include the full key, raw prompts, or the ledger itself.
 
 ---
