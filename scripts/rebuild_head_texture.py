@@ -6,6 +6,7 @@ bundle, and refuses a concurrent change to the accepted generation.
 """
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -25,10 +26,18 @@ def rebuild(folder):
     with HeadArtifactTransaction(folder, seed=True) as publication:
         accepted = published_folder(folder)
         data = json.loads((publication.stage / 'mesh.json').read_text())
-        unchanged = {
-            key: data.get(key)
-            for key in ('positions', 'normals', 'indices', 'accessories', 'transform')
-        }
+        unchanged = deepcopy(
+            {
+                key: data.get(key)
+                for key in (
+                    'positions',
+                    'normals',
+                    'indices',
+                    'accessories',
+                    'transform',
+                )
+            }
+        )
         physics = {
             name: (publication.stage / name).read_bytes()
             for name in ('physics-cage.json', 'physics-binding.json')
@@ -49,12 +58,11 @@ def rebuild(folder):
                 'landmarksWorld'
             ]
         )
-        _, center, basis, _ = normalized_frame(points)
+        normalized, center, basis, _ = normalized_frame(points)
         # Earlier releases narrowed anatomical ear labels using unregistered
         # photo masks. Recover correspondence only; never adopt fitted positions.
         from scripts.fit_head_template import fit_template
 
-        normalized, _, _, _ = normalized_frame(points)
         _, topology, _, template = fit_template(
             normalized, data['stats']['templateFit'].get('regularization', 0.025)
         )
@@ -65,6 +73,14 @@ def rebuild(folder):
         for sign, region in data['stats']['templateFit']['earRegions'].items():
             region['coreVertices'] = template['earRegions'][sign]['coreVertices']
             region['anatomicalCoreVertices'] = region['coreVertices'].copy()
+        data['stats']['earOwnership'] = {
+            sign: {
+                'earVertices': len(region['coreVertices']),
+                'method': 'Anatomical material identity retained independently of photographic visibility',
+                'geometryChanged': False,
+            }
+            for sign, region in data['stats']['templateFit']['earRegions'].items()
+        }
         rec = pycolmap.Reconstruction(str(folder / 'photo-cameras'))
         frames = {
             frame['filename']: frame

@@ -29,9 +29,16 @@ facial vertices stay pinned. Disconnected or spatially close surface sheets
 do not share graph edges. Alpha, hair, skin and occluder masks use the same
 corrected sample coordinates as RGB.
 
+The extra confidence granted to oblique hair projections fades with image-warp
+displacement and proximity along the surface to the ear. A strong original
+photographic sample keeps its confidence. Inpainted source-ear pixels supply
+no skull-color votes; otherwise a synthesized dark ear shadow can incorrectly
+override the missing-surface estimate.
+
 Posterior visibility compares the texel's triangle plane with the first depth
 hit at the rasterizer's pixel-center ray, with a 0.5 mm tolerance in nominal
-model units. Central measured-face visibility retains its existing behavior.
+model units. It applies to the ears and lower posterior scalp; central
+measured-face and crown visibility retain their existing behavior.
 The tolerance is an engineering parameter, not a measurement-accuracy claim.
 
 The bake retains anatomical ear material labels even when a photograph cannot
@@ -80,12 +87,27 @@ Regression tests exercise occluded surfaces separated by 2 mm, oblique
 first-hit planes, missing depth, geodesic falloff, measured-face pins,
 disconnected surfaces, camera selection with rejected samples, connected ear
 completion, unchanged photographed donors and bounded short-hair sampling.
+The focused Python suite passes 68 tests; viewer bundle, sponsor hooks and
+Meshy hooks pass 9 Node tests. These are software checks, not a perceptual
+quality benchmark of the cited research systems.
 
 Visual review uses the saved capture with an identical-geometry before/after
 render, including both profiles and the back. Low-resolution iterations are
 for inspection only; the final bake uses the original 3072 resolution.
+The scan was loaded through the normal viewer with Newton ready. Exact
+geometry/accessory equality and unchanged physics files were verified against
+the saved baseline. The bake's fallback-preservation audit also verifies that
+supported prepared colors are not altered by missing-region completion; this
+is distinct from comparing colors between different registration versions.
 
 Unseen ear backs and hair gaps remain appearance estimates. Coarse masks,
 camera registration errors, directional baked lighting and residual geometric
 dents can still affect the result. A texture repair cannot establish geometry
 or identity accuracy for regions absent from the video.
+
+The reviewed result still has a visible transition behind the left ear. Ear
+material assignment and the large misplaced hair patch improved, but this is
+not a claim that the head now looks fully natural. The retained comparison is
+at `http://localhost:5173/generated/rear-head-review.html?after=rear-texture-after`;
+the machine-readable capture validation is in
+`.local/rear-head-repair/texture-validation.json`.

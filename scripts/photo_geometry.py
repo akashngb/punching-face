@@ -788,7 +788,9 @@ def bake_photographs(
         # Test the same pixel-center ray as the depth rasterizer, with the
         # actual triangle plane rather than interpolated shading normals.
         # Keep the accepted central-face sampling unchanged.
-        posterior = (~observed) | ear_surface
+        posterior = ear_surface | (
+            (~observed) & (texel[near, 2] < -0.12) & (texel[near, 1] < p[10, 1] + 0.015)
+        )
         ray_xy = cam.cam_from_img(ij[posterior] + 0.5)
         rays = np.column_stack([ray_xy, np.ones(len(ray_xy))])
         camera_facets = (
@@ -1096,6 +1098,13 @@ def bake_photographs(
         # clear, front-facing observation retains its original confidence.
         displacement = np.linalg.norm(sample_projection - xy, axis=1)
         alignment = np.exp(-((displacement / max(w * 0.01, 1.0)) ** 2))
+        if registration:
+            # Curved, partially hidden ear/scalp junctions need a clear view
+            # before oblique hair can suppress missing-material completion.
+            junction = np.maximum.reduce(
+                [weight[near] for weight in registration.values()]
+            )
+            alignment *= (1 - junction) ** 2
         maxima['hair_support'] = (
             quality + (maxima['hair_support'] - quality) * alignment
         )
@@ -1111,7 +1120,7 @@ def bake_photographs(
                 facing,
                 quality,
                 camera_origin,
-                (~observed) & (parts == 0) & (~bottom),
+                (~observed) & (parts == 0) & (~bottom) & (texel[near, 1] < p[10, 1]),
             )
             * preference
         )
