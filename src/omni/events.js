@@ -18,18 +18,20 @@ export class EventBus extends EventTarget {
 
   emit(event) {
     if (!event || typeof event !== 'object') return;
-    const stamped = {...event, t: event.t ?? performance.now()};
+    const stamped = { ...event, t: event.t ?? performance.now() };
     this._log.push(stamped);
     if (this._log.length > this._max) this._log.splice(0, this._log.length - this._max);
-    this.dispatchEvent(new CustomEvent('event', {detail: stamped}));
-    this.dispatchEvent(new CustomEvent(stamped.type || 'unknown', {detail: stamped}));
+    this.dispatchEvent(new CustomEvent('event', { detail: stamped }));
+    this.dispatchEvent(new CustomEvent(stamped.type || 'unknown', { detail: stamped }));
   }
 
-  history({since = 0} = {}) {
-    return this._log.filter(e => e.t >= since);
+  history({ since = 0 } = {}) {
+    return this._log.filter((e) => e.t >= since);
   }
 
-  clear() { this._log = []; }
+  clear() {
+    this._log = [];
+  }
 }
 
 /**
@@ -38,8 +40,8 @@ export class EventBus extends EventTarget {
  */
 export function formatEvent(event) {
   if (!event) return '';
-  const round = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v)
-    ? +v.toFixed(d) : null);
+  const round = (v, d = 2) =>
+    typeof v === 'number' && Number.isFinite(v) ? +v.toFixed(d) : null;
   switch (event.type) {
     case 'press': {
       const pressure = round(event.pressure, 2);

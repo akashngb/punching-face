@@ -1,0 +1,103 @@
+/* Engine selector in the head-scan dialog (src/meshy-engine.js). */
+.engine-choice {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0 10px;
+  padding: 8px 10px 10px;
+  border: 1px solid #d6dfce;
+  border-radius: 9px;
+  min-width: 0;
+}
+.engine-choice legend {
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6a7b5e;
+}
+.engine-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.engine-option:hover {
+  background: #eef2e6;
+}
+.engine-option:has(input:checked) {
+  background: #e6f2d3;
+  border-color: #c0da97;
+}
+.engine-option:has(input:focus-visible) {
+  outline: 2px solid #4e9670;
+  outline-offset: 2px;
+}
+.engine-option input {
+  margin: 3px 0 0;
+  accent-color: #587853;
+}
+.engine-option strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+.engine-option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+#engine-meshy-panel {
+  margin-bottom: 12px;
+}
+#engine-meshy-panel .note {
+  margin: 0;
+}
+#engine-meshy-key {
+  width: 100%;
+  padding: 10px;
+  margin: 8px 0;
+  border: 1px solid #bcc4b3;
+  background: #fff;
+  border-radius: 6px;
+}
+#engine-meshy-test {
+  margin-left: 6px;
+}
+.engine-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.engine-views[hidden] {
+  display: none;
+}
+.engine-views figure {
+  margin: 0;
+  text-align: center;
+}
+.engine-views img {
+  display: block;
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  background: #192c24;
+  border-radius: 6px;
+}
+.engine-views figcaption {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+/* These options only steer the local pipeline. */
+#face-scan-dialog.engine-meshy label.check:has(#face-cloud-review),
+#face-scan-dialog.engine-meshy label.check:has(#face-cloud-review) + p.muted {
+  display: none;
+}

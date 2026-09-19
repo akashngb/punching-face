@@ -4,7 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "format": "npm run format:web && npm run format:python",
+    "format:check": "npm run format:web:check && npm run format:python:check",
+    "format:web": "prettier --write \"**/*.{js,mjs,css,html}\" package.json .prettierrc.json",
+    "format:web:check": "prettier --check \"**/*.{js,mjs,css,html}\" package.json .prettierrc.json",
+    "format:python": ".local/format-env/bin/python -m black .",
+    "format:python:check": ".local/format-env/bin/python -m black --check .",
     "dev": "node scripts/dev.mjs",
+    "dev:video": "node scripts/dev-video.mjs",
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
     "test:reconstruction": ".venv/bin/python tests/reconstruction_test.py",
@@ -32,6 +39,7 @@
     "three": "0.180.0"
   },
   "devDependencies": {
+    "prettier": "3.9.8",
     "vite": "8.3.0"
   }
 }

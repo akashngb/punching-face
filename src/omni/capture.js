@@ -38,14 +38,14 @@ class OmniTap extends AudioWorkletProcessor {
 registerProcessor('omni-tap', OmniTap);
 `;
 
-const FRAME_MS = 20;                    // AudioWorklet frame length
-const TARGET_RATE = 16000;              // 16 kHz PCM16 is Realtime's default
-const KEYFRAME_MS_DEFAULT = 700;        // ~1.5 fps
-const LONG_EDGE_PX = 512;               // OMNI.md §6.1
+const FRAME_MS = 20; // AudioWorklet frame length
+const TARGET_RATE = 16000; // 16 kHz PCM16 is Realtime's default
+const KEYFRAME_MS_DEFAULT = 700; // ~1.5 fps
+const LONG_EDGE_PX = 512; // OMNI.md §6.1
 const JPEG_QUALITY = 0.72;
 
 export class FrameCapture {
-  constructor({video, session, keyframeMs = KEYFRAME_MS_DEFAULT} = {}) {
+  constructor({ video, session, keyframeMs = KEYFRAME_MS_DEFAULT } = {}) {
     this.video = video;
     this.session = session;
     this.keyframeMs = keyframeMs;
@@ -53,7 +53,9 @@ export class FrameCapture {
     this.timer = null;
     this.running = false;
     this.pending = 0;
-    this._workerUrl = URL.createObjectURL(new Blob([FRAME_WORKER_SRC], {type: 'application/javascript'}));
+    this._workerUrl = URL.createObjectURL(
+      new Blob([FRAME_WORKER_SRC], { type: 'application/javascript' }),
+    );
   }
 
   start() {
@@ -61,7 +63,7 @@ export class FrameCapture {
     this.running = true;
     if (!this.worker) {
       this.worker = new Worker(this._workerUrl);
-      this.worker.onmessage = event => {
+      this.worker.onmessage = (event) => {
         this.pending = Math.max(0, this.pending - 1);
         const b64 = _bufferToBase64(new Uint8Array(event.data.buffer));
         this.session?.sendFrame(b64);
@@ -81,7 +83,7 @@ export class FrameCapture {
   /** Take one frame immediately (called on every contact event). */
   async snapshot() {
     if (!this.running) return;
-    if (this.pending > 2) return;            // don't back up the worker
+    if (this.pending > 2) return; // don't back up the worker
     const video = this.video;
     if (!video?.videoWidth || video.readyState < 2) return;
     // ImageBitmap avoids canvas GPU work on the main thread; we ship to worker.
@@ -91,17 +93,21 @@ export class FrameCapture {
       const scale = Math.min(1, w / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.round(video.videoWidth * scale);
       const height = Math.round(video.videoHeight * scale);
-      bitmap = await createImageBitmap(video, {resizeWidth: width, resizeHeight: height, resizeQuality: 'medium'});
+      bitmap = await createImageBitmap(video, {
+        resizeWidth: width,
+        resizeHeight: height,
+        resizeQuality: 'medium',
+      });
     } catch {
       return;
     }
     this.pending++;
-    this.worker.postMessage({bitmap, quality: JPEG_QUALITY}, [bitmap]);
+    this.worker.postMessage({ bitmap, quality: JPEG_QUALITY }, [bitmap]);
   }
 }
 
 export class AudioCapture extends EventTarget {
-  constructor({session, sampleRate = TARGET_RATE} = {}) {
+  constructor({ session, sampleRate = TARGET_RATE } = {}) {
     super();
     this.session = session;
     this.sampleRate = sampleRate;
@@ -114,7 +120,9 @@ export class AudioCapture extends EventTarget {
     this._noise = 0.005;
     this._speakingFrames = 0;
     this._quietFrames = 0;
-    this._workletUrl = URL.createObjectURL(new Blob([AUDIO_WORKLET_SRC], {type: 'application/javascript'}));
+    this._workletUrl = URL.createObjectURL(
+      new Blob([AUDIO_WORKLET_SRC], { type: 'application/javascript' }),
+    );
   }
 
   async start() {
@@ -123,10 +131,10 @@ export class AudioCapture extends EventTarget {
     await this.ctx.resume();
     await this.ctx.audioWorklet.addModule(this._workletUrl);
     this.mic = await navigator.mediaDevices.getUserMedia({
-      audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     this.node = new AudioWorkletNode(this.ctx, 'omni-tap');
-    this.node.port.onmessage = event => this._onChunk(event.data);
+    this.node.port.onmessage = (event) => this._onChunk(event.data);
     this.ctx.createMediaStreamSource(this.mic).connect(this.node);
     this.running = true;
     this.dispatchEvent(new CustomEvent('started'));
@@ -134,8 +142,12 @@ export class AudioCapture extends EventTarget {
 
   stop() {
     this.running = false;
-    try { this.node?.disconnect(); } catch { /* not connected */ }
-    this.mic?.getTracks().forEach(t => t.stop());
+    try {
+      this.node?.disconnect();
+    } catch {
+      /* not connected */
+    }
+    this.mic?.getTracks().forEach((t) => t.stop());
     this.ctx?.close();
     this.ctx = this.mic = this.node = null;
     this.speaking = false;
@@ -146,7 +158,7 @@ export class AudioCapture extends EventTarget {
     // Assemble into 20 ms frames at the source sample rate.
     if (!this.running || !this.ctx) return;
     const rate = this.ctx.sampleRate;
-    const size = Math.round(rate * FRAME_MS / 1000);
+    const size = Math.round((rate * FRAME_MS) / 1000);
     const merged = new Float32Array(this._pending.length + chunk.length);
     merged.set(this._pending);
     merged.set(chunk, this._pending.length);
@@ -164,16 +176,23 @@ export class AudioCapture extends EventTarget {
     // interruption if the model supports it; this only stops us shipping silence.
     this._noise = this._noise * 0.98 + level * 0.02;
     const active = level > this._noise * 3.2 + 0.008;
-    if (active) { this._speakingFrames++; this._quietFrames = 0; }
-    else       { this._speakingFrames = 0; this._quietFrames++; }
+    if (active) {
+      this._speakingFrames++;
+      this._quietFrames = 0;
+    } else {
+      this._speakingFrames = 0;
+      this._quietFrames++;
+    }
     const wasSpeaking = this.speaking;
     if (!wasSpeaking && this._speakingFrames > 3) this.speaking = true;
     if (wasSpeaking && this._quietFrames > 30) this.speaking = false;
     if (this.speaking !== wasSpeaking) {
-      this.dispatchEvent(new CustomEvent(this.speaking ? 'speech.start' : 'speech.end'));
+      this.dispatchEvent(
+        new CustomEvent(this.speaking ? 'speech.start' : 'speech.end'),
+      );
       if (!this.speaking && this.session) this.session.commitAudio();
     }
-    if (!this.speaking) return;                     // don't ship silence
+    if (!this.speaking) return; // don't ship silence
     // Downsample linearly to 16 kHz, encode PCM16 little-endian.
     const downsampled = _downsample(frame, sourceRate, this.sampleRate);
     const pcm16 = new Int16Array(downsampled.length);

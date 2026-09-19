@@ -1,5 +1,14 @@
-# Optional: Sentry for the Python services (Sentry sponsor track). Safe to omit; sponsor_obs.py no-ops without it.
-# Install into BOTH environments:  .venv/bin/pip install -r requirements-sponsors.txt  &&  .local/newton-env/bin/pip install -r requirements-sponsors.txt
+# Optional Sentry SDK for the Python services (Sentry sponsor track). Safe to omit: sponsor_obs.py
+# no-ops without it.
+#
+# env: .venv, .local/newton-env
+# python: >=3.9
+# optional: yes
+# install: .venv/bin/python -m pip install -r requirements-sponsors.txt
+#          .local/newton-env/bin/python -m pip install -r requirements-sponsors.txt
+#
+# Both environments need it because sponsor_obs.py is imported by services in each
+# (server.py and face_pipeline.py in .venv, physics_server.py in .local/newton-env).
 sentry-sdk>=2.35,<3
-# urllib3 v2 warns on every import under the system Python 3.9 (LibreSSL); v1.26 is fully supported by sentry-sdk.
+# urllib3 v2 warns on every import under Apple's Python 3.9 (LibreSSL); sentry-sdk fully supports v1.26.
 urllib3<2; python_version<"3.10"

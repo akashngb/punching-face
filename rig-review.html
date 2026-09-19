@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CONTACT · Facial pain reaction</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #121820;
+        color: #e7ebee;
+        font:
+          14px system-ui,
+          sans-serif;
+      }
+      header {
+        padding: 24px 32px;
+        border-bottom: 1px solid #36404c;
+      }
+      h1 {
+        font-size: 23px;
+        margin: 0 0 8px;
+      }
+      p {
+        color: #aab5c3;
+        margin: 8px 0;
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+        padding: 18px 32px;
+      }
+      button,
+      select {
+        background: #293746;
+        color: #fff;
+        border: 1px solid #57718b;
+        border-radius: 6px;
+        padding: 9px 14px;
+      }
+      label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      main {
+        height: 65vh;
+        min-height: 340px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+      .pane {
+        position: relative;
+        min-width: 0;
+      }
+      .pane + .pane {
+        border-left: 1px solid #36404c;
+      }
+      h2 {
+        position: absolute;
+        top: 0;
+        left: 30px;
+        font-size: 15px;
+        z-index: 1;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #metrics {
+        padding: 16px 32px;
+        line-height: 1.7;
+        color: #b9d3e8;
+        white-space: pre-wrap;
+      }
+      a {
+        color: #9ad6ef;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>A face that reacts to the hit</h1>
+      <p>
+        Same head and punch, with a visible wince and recovery. Drag to orbit; scroll to
+        zoom.
+        <a href="/">Open CONTACT</a>
+      </p>
+    </header>
+    <nav>
+      <label
+        >Strike
+        <select id="strike">
+          <option value="left">Left hook</option>
+          <option value="right">Right hook</option>
+          <option value="chin">Uppercut</option>
+          <option value="front">Frontal cheek</option>
+        </select></label
+      >
+      <label
+        >Magnitude
+        <input
+          id="magnitude"
+          type="range"
+          min="0.1"
+          max="1"
+          step="0.05"
+          value="0.85"
+        /><output id="strength">0.85</output></label
+      >
+      <label
+        >Time after contact
+        <input
+          id="pose"
+          type="range"
+          min="0"
+          max="1.8"
+          step="0.01"
+          value="0.35"
+        /><output id="time">0.35 s</output></label
+      >
+      <label><input id="wire" type="checkbox" />Wireframe</label>
+      <label><input id="texture" type="checkbox" checked />Photo texture</label>
+      <button id="replay" disabled>Replay impact</button>
+    </nav>
+    <main>
+      <div class="pane" id="before"><h2>Before · contact deformation</h2></div>
+      <div class="pane" id="after"><h2>After · contact + pain reaction</h2></div>
+    </main>
+    <div id="metrics" role="status">Loading the latest saved head…</div>
+    <script type="module" src="/src/rig-review.js"></script>
+  </body>
+</html>

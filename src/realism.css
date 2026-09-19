@@ -1,0 +1,42 @@
+.realism-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.realism-heading span {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: #64775c;
+}
+.realism-panel .muted {
+  line-height: 1.5;
+}
+.realism-panel .controls-label {
+  margin-top: 15px;
+}
+.realism-comparison {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #d7decf;
+  border-radius: 9px;
+  margin: 9px 0;
+}
+.realism-comparison button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+}
+.realism-comparison button.active {
+  background: #486042;
+  color: white;
+}
+.realism-note {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #7b8176;
+  margin: 10px 0 0;
+}
+.realism-panel [hidden] {
+  display: none;
+}

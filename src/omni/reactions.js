@@ -16,10 +16,10 @@
 
 const SYNTH = {
   // arena
-  'arena.grunt.low':   {tone: 190, ms: 120, fadeMs: 40, shape: 'grunt'},
-  'arena.grunt.mid':   {tone: 220, ms: 180, fadeMs: 50, shape: 'grunt'},
-  'arena.grunt.high':  {tone: 260, ms: 260, fadeMs: 60, shape: 'exhale'},
-  'arena.tap':         {tone: 340, ms: 90,  fadeMs: 30, shape: 'grunt'},
+  'arena.grunt.low': { tone: 190, ms: 120, fadeMs: 40, shape: 'grunt' },
+  'arena.grunt.mid': { tone: 220, ms: 180, fadeMs: 50, shape: 'grunt' },
+  'arena.grunt.high': { tone: 260, ms: 260, fadeMs: 60, shape: 'exhale' },
+  'arena.tap': { tone: 340, ms: 90, fadeMs: 30, shape: 'grunt' },
 };
 
 const cache = new Map();
@@ -38,14 +38,18 @@ async function _load(key) {
   if (cache.has(key)) return cache.get(key);
   // Try a real file first (production case).
   try {
-    const response = await fetch(`/omni-reactions/${key}.wav`, {cache: 'force-cache'});
+    const response = await fetch(`/omni-reactions/${key}.wav`, {
+      cache: 'force-cache',
+    });
     if (response.ok) {
       const arrayBuffer = await response.arrayBuffer();
       const buffer = await audioCtx.decodeAudioData(arrayBuffer);
       cache.set(key, buffer);
       return buffer;
     }
-  } catch { /* fall through to synth */ }
+  } catch {
+    /* fall through to synth */
+  }
   const spec = SYNTH[key];
   if (!spec) return null;
   const buffer = _synthesize(audioCtx, spec);
@@ -53,12 +57,12 @@ async function _load(key) {
   return buffer;
 }
 
-function _synthesize(audioCtx, {tone, ms, fadeMs, shape}) {
+function _synthesize(audioCtx, { tone, ms, fadeMs, shape }) {
   const rate = audioCtx.sampleRate;
-  const samples = Math.round(rate * ms / 1000);
+  const samples = Math.round((rate * ms) / 1000);
   const buffer = audioCtx.createBuffer(1, samples, rate);
   const data = buffer.getChannelData(0);
-  const fadeSamples = Math.round(rate * fadeMs / 1000);
+  const fadeSamples = Math.round((rate * fadeMs) / 1000);
   for (let i = 0; i < samples; i++) {
     const t = i / rate;
     // A little vibrato + a soft attack. Not a real voice, but reads as a
@@ -66,8 +70,12 @@ function _synthesize(audioCtx, {tone, ms, fadeMs, shape}) {
     const wobble = 1 + 0.03 * Math.sin(2 * Math.PI * 5.5 * t);
     let s = Math.sin(2 * Math.PI * tone * wobble * t);
     if (shape === 'grunt') s = Math.sign(s) * Math.pow(Math.abs(s), 0.7);
-    else if (shape === 'moan') s = Math.sin(2 * Math.PI * tone * t) * 0.6 + Math.sin(2 * Math.PI * tone * 1.5 * t) * 0.4;
-    else if (shape === 'cry') s = Math.sin(2 * Math.PI * (tone + 40 * t / (ms/1000)) * t);
+    else if (shape === 'moan')
+      s =
+        Math.sin(2 * Math.PI * tone * t) * 0.6 +
+        Math.sin(2 * Math.PI * tone * 1.5 * t) * 0.4;
+    else if (shape === 'cry')
+      s = Math.sin(2 * Math.PI * (tone + (40 * t) / (ms / 1000)) * t);
     else if (shape === 'exhale') s = (Math.random() * 2 - 1) * 0.7 + s * 0.3;
     // envelope
     let env = 1;
@@ -79,10 +87,16 @@ function _synthesize(audioCtx, {tone, ms, fadeMs, shape}) {
 }
 
 /** Play the reaction. Returns the AudioBufferSourceNode so callers can cancel. */
-export async function play(key, {volume = 1.0} = {}) {
+export async function play(key, { volume = 1.0 } = {}) {
   const audioCtx = _getCtx();
   if (!audioCtx) return null;
-  if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch { /* ignore */ } }
+  if (audioCtx.state === 'suspended') {
+    try {
+      await audioCtx.resume();
+    } catch {
+      /* ignore */
+    }
+  }
   const buffer = await _load(key);
   if (!buffer) return null;
   const source = audioCtx.createBufferSource();
@@ -109,5 +123,5 @@ export function keyForEvent(event) {
 
 /** Warm up decoding at scene load so the very first hit doesn't pay the cost. */
 export async function warmUp(keys) {
-  await Promise.all(keys.map(k => _load(k)));
+  await Promise.all(keys.map((k) => _load(k)));
 }

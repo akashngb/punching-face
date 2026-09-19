@@ -1,0 +1,11 @@
+# Formatting tools: Black for Python. Prettier comes from package.json.
+#
+# env: .local/format-env
+# python: >=3.10
+# optional: yes
+# install: .local/format-env/bin/python -m pip install -r requirements-dev.txt
+#
+# Kept out of .venv because black 26 requires Python 3.10+ and .venv is 3.9 on the dev machine.
+# pyproject.toml pins the same version (required-version) and formats for py39, the oldest
+# interpreter that runs this code.
+black==26.5.1

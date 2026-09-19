@@ -5,7 +5,7 @@
 // The relay lives on 127.0.0.1:5177 and always speaks WebSocket, whether it's
 // bridging a real OMNI upstream or its in-process mock. See omni_relay.py.
 
-import {latencyOverlay} from './latency.js';
+import { latencyOverlay } from './latency.js';
 
 const RELAY_HTTP = 'http://127.0.0.1:5177';
 const RELAY_WS = 'ws://127.0.0.1:5177/omni/realtime';
@@ -13,7 +13,7 @@ const RELAY_WS = 'ws://127.0.0.1:5177/omni/realtime';
 const NOOP = () => {};
 
 export class OmniSession extends EventTarget {
-  constructor({relayHttp = RELAY_HTTP, relayWs = RELAY_WS, keepWarm = true} = {}) {
+  constructor({ relayHttp = RELAY_HTTP, relayWs = RELAY_WS, keepWarm = true } = {}) {
     super();
     this.relayHttp = relayHttp;
     this.relayWs = relayWs;
@@ -56,12 +56,12 @@ export class OmniSession extends EventTarget {
       return health;
     } catch (error) {
       this.enabled = false;
-      this._emit('offline', {reason: error.message});
+      this._emit('offline', { reason: error.message });
       return null;
     }
   }
 
-  configure({persona, tools}) {
+  configure({ persona, tools }) {
     if (persona !== undefined) this.persona = persona;
     if (tools !== undefined) this.tools = tools;
     // If we already have a session, resend on the fly.
@@ -89,29 +89,46 @@ export class OmniSession extends EventTarget {
         this._latency.mark('session.open.done');
         this._sendSessionUpdate();
         this._pingTimer = setInterval(() => {
-          if (socket.readyState === 1) socket.send(JSON.stringify({type: 'engine.ping', t: Date.now()}));
+          if (socket.readyState === 1)
+            socket.send(JSON.stringify({ type: 'engine.ping', t: Date.now() }));
         }, 20_000);
       };
-      socket.onmessage = event => {
+      socket.onmessage = (event) => {
         if (typeof event.data === 'string') this._onText(event.data);
         else this._onBinary(event.data);
       };
       socket.onerror = () => {
-        if (!done) { done = true; reject(new Error('relay socket error')); }
+        if (!done) {
+          done = true;
+          reject(new Error('relay socket error'));
+        }
       };
       socket.onclose = () => {
         clearInterval(this._pingTimer);
         this._pingTimer = null;
-        this._emit('closed', {clean: this._closedByUser});
+        this._emit('closed', { clean: this._closedByUser });
         if (!this._closedByUser && this.keepWarm) this._reconnect();
-        if (!done) { done = true; resolve(); }
+        if (!done) {
+          done = true;
+          resolve();
+        }
       };
       // Resolve as soon as the socket is open — callers get an early handle.
       const readyPoll = setInterval(() => {
-        if (socket.readyState === 1 && !done) { done = true; clearInterval(readyPoll); resolve(); }
+        if (socket.readyState === 1 && !done) {
+          done = true;
+          clearInterval(readyPoll);
+          resolve();
+        }
       }, 40);
       // Fail fast if handshake takes too long.
-      setTimeout(() => { if (!done) { done = true; clearInterval(readyPoll); reject(new Error('relay timeout')); } }, 8000);
+      setTimeout(() => {
+        if (!done) {
+          done = true;
+          clearInterval(readyPoll);
+          reject(new Error('relay timeout'));
+        }
+      }, 8000);
     });
   }
 
@@ -126,20 +143,26 @@ export class OmniSession extends EventTarget {
       turn_detection: null,
     };
     if (this.voice) session.voice = this.voice;
-    this.socket.send(JSON.stringify({type: 'session.update', session}));
+    this.socket.send(JSON.stringify({ type: 'session.update', session }));
     this._pendingPersona = null;
     this._pendingTools = null;
   }
 
   _reconnect() {
     const wait = Math.min(30_000, 500 * 2 ** Math.min(this.attempt, 6));
-    this._emit('reconnecting', {waitMs: wait, attempt: this.attempt});
+    this._emit('reconnecting', { waitMs: wait, attempt: this.attempt });
     setTimeout(() => this.connect().catch(NOOP), wait);
   }
 
   disconnect() {
     this._closedByUser = true;
-    if (this.socket) { try { this.socket.close(1000); } catch { /* already closing */ } }
+    if (this.socket) {
+      try {
+        this.socket.close(1000);
+      } catch {
+        /* already closing */
+      }
+    }
   }
 
   /**
@@ -148,18 +171,22 @@ export class OmniSession extends EventTarget {
    */
   appendAudio(base64) {
     if (!this.socket || this.socket.readyState !== 1) return;
-    this.socket.send(JSON.stringify({type: 'input_audio_buffer.append', audio: base64}));
+    this.socket.send(
+      JSON.stringify({ type: 'input_audio_buffer.append', audio: base64 }),
+    );
   }
 
   commitAudio() {
     if (!this.socket || this.socket.readyState !== 1) return;
-    this.socket.send(JSON.stringify({type: 'input_audio_buffer.commit'}));
+    this.socket.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
     this._audioCommittedOnce = true;
     this._latency.mark('audio.commit');
     // After the first commit, any frames we buffered are safe to send.
     if (this._frameBuffer.length) {
       for (const base64 of this._frameBuffer) {
-        this.socket.send(JSON.stringify({type: 'input_image_buffer.append', image: base64}));
+        this.socket.send(
+          JSON.stringify({ type: 'input_image_buffer.append', image: base64 }),
+        );
       }
       this._frameBuffer.length = 0;
       this._latency.mark('frame.sent');
@@ -177,7 +204,9 @@ export class OmniSession extends EventTarget {
       if (this._frameBuffer.length > 4) this._frameBuffer.shift();
       return;
     }
-    this.socket.send(JSON.stringify({type: 'input_image_buffer.append', image: base64}));
+    this.socket.send(
+      JSON.stringify({ type: 'input_image_buffer.append', image: base64 }),
+    );
     this._latency.mark('frame.sent');
   }
 
@@ -191,7 +220,7 @@ export class OmniSession extends EventTarget {
   sendEngineEvent(event, contextText) {
     if (!this.socket || this.socket.readyState !== 1) return;
     this._maybePrimeAudio();
-    this.socket.send(JSON.stringify({type: 'engine.event', event, contextText}));
+    this.socket.send(JSON.stringify({ type: 'engine.event', event, contextText }));
     this._latency.mark('event.sent');
   }
 
@@ -203,7 +232,9 @@ export class OmniSession extends EventTarget {
     for (let i = 0; i < silent.length; i += 8192) {
       s += String.fromCharCode.apply(null, silent.subarray(i, i + 8192));
     }
-    this.socket.send(JSON.stringify({type: 'input_audio_buffer.append', audio: btoa(s)}));
+    this.socket.send(
+      JSON.stringify({ type: 'input_audio_buffer.append', audio: btoa(s) }),
+    );
     this.commitAudio();
   }
 
@@ -211,33 +242,52 @@ export class OmniSession extends EventTarget {
   sendUserText(text) {
     if (!this.socket || this.socket.readyState !== 1) return;
     this._maybePrimeAudio();
-    this.socket.send(JSON.stringify({
-      type: 'conversation.item.create',
-      item: {type: 'message', role: 'user', content: [{type: 'input_text', text}]}
-    }));
-    this.socket.send(JSON.stringify({type: 'response.create', response: {modalities: ['text', 'audio']}}));
+    this.socket.send(
+      JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text }],
+        },
+      }),
+    );
+    this.socket.send(
+      JSON.stringify({
+        type: 'response.create',
+        response: { modalities: ['text', 'audio'] },
+      }),
+    );
   }
 
   /** Prompt the model to respond in a specific way (used for proactive turns). */
-  requestResponse(instructions, {modalities = ['text', 'audio']} = {}) {
+  requestResponse(instructions, { modalities = ['text', 'audio'] } = {}) {
     if (!this.socket || this.socket.readyState !== 1) return;
     this._maybePrimeAudio();
-    this.socket.send(JSON.stringify({type: 'response.create',
-      response: {modalities, instructions}}));
+    this.socket.send(
+      JSON.stringify({
+        type: 'response.create',
+        response: { modalities, instructions },
+      }),
+    );
     this._latency.mark('response.requested');
   }
 
   /** Cancel an in-flight response (for barge-in). */
   cancelResponse() {
     if (!this.socket || this.socket.readyState !== 1) return;
-    this.socket.send(JSON.stringify({type: 'response.cancel'}));
+    this.socket.send(JSON.stringify({ type: 'response.cancel' }));
   }
 
   // ---------------------- private: dispatch typed events ---------------------
 
   _onText(data) {
     let msg;
-    try { msg = JSON.parse(data); } catch { return; }
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
     const type = msg.type || msg.event;
     switch (type) {
       case 'omni.session.ready':
@@ -248,18 +298,21 @@ export class OmniSession extends EventTarget {
         this._emit('ready', msg);
         return;
       case 'omni.session.error':
-        this._emit('error', {reason: msg.reason});
+        this._emit('error', { reason: msg.reason });
         return;
       case 'session.updated':
         this._emit('session.updated', msg.session || {});
         return;
       case 'response.output_text.delta':
       case 'response.text.delta':
-        this._emit('text.delta', {delta: msg.delta || msg.text || ''});
+        this._emit('text.delta', { delta: msg.delta || msg.text || '' });
         return;
       case 'response.output_audio.delta':
       case 'response.audio.delta':
-        this._emit('audio.delta', {base64: msg.delta || msg.audio, rate: msg.sample_rate_hz || 24000});
+        this._emit('audio.delta', {
+          base64: msg.delta || msg.audio,
+          rate: msg.sample_rate_hz || 24000,
+        });
         return;
       case 'response.function_call_arguments.done':
       case 'response.tool_call':
@@ -288,15 +341,19 @@ export class OmniSession extends EventTarget {
   }
 
   _onBinary(buffer) {
-    this._emit('binary', {buffer});
+    this._emit('binary', { buffer });
   }
 
   _parseArgs(payload) {
     if (typeof payload !== 'string') return payload || {};
-    try { return JSON.parse(payload); } catch { return {_raw: payload}; }
+    try {
+      return JSON.parse(payload);
+    } catch {
+      return { _raw: payload };
+    }
   }
 
   _emit(name, detail) {
-    this.dispatchEvent(new CustomEvent(name, {detail}));
+    this.dispatchEvent(new CustomEvent(name, { detail }));
   }
 }

@@ -1,0 +1,6 @@
+[tool.black]
+line-length = 88
+target-version = ['py39']
+skip-string-normalization = true
+required-version = '26.5.1'
+force-exclude = '/(node_modules|\.local|\.venv|public|dist|dist-guest|artifacts|target)/'

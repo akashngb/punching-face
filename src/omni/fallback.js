@@ -11,15 +11,15 @@
 // handles the key, streaming and Sentry AI-monitoring spans. That means Plan
 // C works even if the OMNI relay (:5177) is down. See OMNI.md §6.5.
 
-import {latencyOverlay} from './latency.js';
+import { latencyOverlay } from './latency.js';
 
 const DEFAULT_TURN_URL = 'http://127.0.0.1:5176/sponsors/coach/turn';
 
 export class FallbackSession extends EventTarget {
-  constructor({turnUrl = DEFAULT_TURN_URL, persona, voiceUrl} = {}) {
+  constructor({ turnUrl = DEFAULT_TURN_URL, persona, voiceUrl } = {}) {
     super();
     this.turnUrl = turnUrl;
-    this.voiceUrl = voiceUrl || null;   // optional ElevenLabs POST endpoint
+    this.voiceUrl = voiceUrl || null; // optional ElevenLabs POST endpoint
     this.persona = persona;
     this.plan = 'C';
     this.sessionId = 'fallback-' + Math.random().toString(36).slice(2, 10);
@@ -32,47 +32,72 @@ export class FallbackSession extends EventTarget {
     this._toolPrompt = '';
   }
 
-  async prime() { return {plan: 'C'}; }
-  async connect() { this._emit('ready', {plan: 'C', mock: false, sessionId: this.sessionId}); }
-  disconnect() { this._pending?.abort?.(); }
-  configure({persona, tools}) {
+  async prime() {
+    return { plan: 'C' };
+  }
+
+  async connect() {
+    this._emit('ready', { plan: 'C', mock: false, sessionId: this.sessionId });
+  }
+
+  disconnect() {
+    this._pending?.abort?.();
+  }
+
+  configure({ persona, tools }) {
     if (persona !== undefined) this.persona = persona;
     if (tools) {
       // In turn-based mode we tell the model about the tools via a system-line;
       // it can't call them directly. It answers with JSON that we parse.
-      this._toolPrompt = 'When you would take an action, output ONLY a JSON object '
-        + '`{"tool":"NAME","arguments":{...}}` on its own line. Available tools: '
-        + tools.map(t => t.name).join(', ') + '. '
-        + 'Otherwise reply naturally.';
+      this._toolPrompt =
+        'When you would take an action, output ONLY a JSON object ' +
+        '`{"tool":"NAME","arguments":{...}}` on its own line. Available tools: ' +
+        tools.map((t) => t.name).join(', ') +
+        '. ' +
+        'Otherwise reply naturally.';
     }
   }
 
-  appendAudio(base64) { this._audioBuffer.push(base64); }
+  appendAudio(base64) {
+    this._audioBuffer.push(base64);
+  }
+
   commitAudio() {
     // Concatenate PCM16 chunks into a WAV and post a turn. The sponsor endpoint
     // already accepts `audioWav` as base64.
     if (!this._audioBuffer.length) return;
     const wav = _pcm16ChunksToWav(this._audioBuffer, 16000);
     this._audioBuffer = [];
-    this._turn({audioWav: _bytesToBase64(wav)});
+    this._turn({ audioWav: _bytesToBase64(wav) });
   }
+
   sendFrame(base64) {
     this._frames.push(base64);
     if (this._frames.length > 4) this._frames.shift();
     this._latency.mark('frame.sent');
   }
+
   sendEngineEvent(event, contextText) {
     // Turn-based: emit a text turn immediately when the event is high-value
     // (release with rebound, guard change, consent flip). Otherwise buffer it
     // in history for the next turn.
-    this._history.push({role: 'system', content: contextText});
-    const urgent = event?.type === 'release' && event?.rebound
-      || event?.type === 'consent';
-    if (urgent) this._turn({text: contextText});
+    this._history.push({ role: 'system', content: contextText });
+    const urgent =
+      (event?.type === 'release' && event?.rebound) || event?.type === 'consent';
+    if (urgent) this._turn({ text: contextText });
   }
-  sendUserText(text) { this._turn({text}); }
-  requestResponse(instructions) { this._turn({text: instructions}); }
-  cancelResponse() { this._pending?.abort?.(); }
+
+  sendUserText(text) {
+    this._turn({ text });
+  }
+
+  requestResponse(instructions) {
+    this._turn({ text: instructions });
+  }
+
+  cancelResponse() {
+    this._pending?.abort?.();
+  }
 
   async _turn(body) {
     this._pending?.abort?.();
@@ -94,7 +119,7 @@ export class FallbackSession extends EventTarget {
     try {
       const response = await fetch(this.turnUrl, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
@@ -103,9 +128,9 @@ export class FallbackSession extends EventTarget {
       const decoder = new TextDecoder();
       let buffer = '';
       for (;;) {
-        const {value, done} = await reader.read();
+        const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, {stream: true});
+        buffer += decoder.decode(value, { stream: true });
         // Parse SSE frames.
         const parts = buffer.split('\n\n');
         buffer = parts.pop();
@@ -114,16 +139,21 @@ export class FallbackSession extends EventTarget {
           const dataLine = /^data: (.+)$/m.exec(part);
           if (!eventLine || !dataLine) continue;
           const evt = eventLine[1];
-          let data; try { data = JSON.parse(dataLine[1]); } catch { data = {}; }
+          let data;
+          try {
+            data = JSON.parse(dataLine[1]);
+          } catch {
+            data = {};
+          }
           if (evt === 'text') {
             firstDelta ??= performance.now();
             said += data.delta || '';
-            this._emit('text.delta', {delta: data.delta || ''});
+            this._emit('text.delta', { delta: data.delta || '' });
           } else if (evt === 'audio') {
             firstDelta ??= performance.now();
-            this._emit('audio.delta', {base64: data.pcm16, rate: data.rate || 24000});
+            this._emit('audio.delta', { base64: data.pcm16, rate: data.rate || 24000 });
           } else if (evt === 'error') {
-            this._emit('error', {reason: data.message || 'fallback error'});
+            this._emit('error', { reason: data.message || 'fallback error' });
           } else if (evt === 'done') {
             this._latency.mark('response.done', performance.now());
             this._emit('response.done', data);
@@ -131,36 +161,49 @@ export class FallbackSession extends EventTarget {
         }
       }
     } catch (error) {
-      if (error.name !== 'AbortError') this._emit('error', {reason: error.message});
+      if (error.name !== 'AbortError') this._emit('error', { reason: error.message });
     } finally {
       this._pending = null;
       // Extract any tool-call from the JSON line the model emitted.
       const toolCall = _parseInlineToolCall(said);
       if (toolCall) this._emit('tool.call', toolCall);
-      if (said) this._history.push({role: 'user', content: body.text || '[turn]'},
-                                    {role: 'assistant', content: said});
+      if (said)
+        this._history.push(
+          { role: 'user', content: body.text || '[turn]' },
+          { role: 'assistant', content: said },
+        );
       // Latency book-keeping so the overlay row is complete.
       if (firstDelta) this._latency.mark('response.first_delta', firstDelta);
     }
   }
 
-  _emit(name, detail) { this.dispatchEvent(new CustomEvent(name, {detail})); }
+  _emit(name, detail) {
+    this.dispatchEvent(new CustomEvent(name, { detail }));
+  }
 }
 
 function _parseInlineToolCall(text) {
   if (!text) return null;
-  const match = text.match(/\{"tool"\s*:\s*"([^"]+)"[^{}]*?("arguments"\s*:\s*(\{[^{}]*\}))?\s*\}/);
+  const match = text.match(
+    /\{"tool"\s*:\s*"([^"]+)"[^{}]*?("arguments"\s*:\s*(\{[^{}]*\}))?\s*\}/,
+  );
   if (!match) return null;
   const name = match[1];
   let args = {};
-  try { args = JSON.parse(match[3] || '{}'); } catch { /* ignore */ }
-  return {name, arguments: args, call_id: null};
+  try {
+    args = JSON.parse(match[3] || '{}');
+  } catch {
+    /* ignore */
+  }
+  return { name, arguments: args, call_id: null };
 }
 
 function _pcm16ChunksToWav(base64Chunks, sampleRate) {
   const pcm = _concatFromBase64(base64Chunks);
   const view = new DataView(new ArrayBuffer(44 + pcm.byteLength));
-  const writeString = (offset, s) => { for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i)); };
+  const writeString = (offset, s) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
   writeString(0, 'RIFF');
   view.setUint32(4, 36 + pcm.byteLength, true);
   writeString(8, 'WAVE');
@@ -179,11 +222,14 @@ function _pcm16ChunksToWav(base64Chunks, sampleRate) {
 }
 
 function _concatFromBase64(chunks) {
-  const buffers = chunks.map(c => _base64ToBytes(c));
+  const buffers = chunks.map((c) => _base64ToBytes(c));
   const total = buffers.reduce((n, b) => n + b.byteLength, 0);
   const out = new Uint8Array(total);
   let offset = 0;
-  for (const buffer of buffers) { out.set(buffer, offset); offset += buffer.byteLength; }
+  for (const buffer of buffers) {
+    out.set(buffer, offset);
+    offset += buffer.byteLength;
+  }
   return out;
 }
 

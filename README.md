@@ -8,6 +8,31 @@ The OMNI engine (Realtime WebSocket → Qwen3.5-Omni) is described under [OMNI i
 
 Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, the Newton CPU service on 5175, the OMNI relay on 5177. All bind to loopback.
 
+## Code formatting
+
+JavaScript, CSS and HTML use Prettier; Python uses Black. Both wrap code at 88
+columns, with two-space web indentation and four-space Python indentation.
+Generated assets, third-party sources and virtual environments are excluded.
+
+Install the formatting tools once, keeping them outside the reconstruction environment:
+
+```sh
+npm install
+python3.13 -m venv .local/format-env
+.local/format-env/bin/python -m pip install -r requirements-dev.txt
+```
+
+Run `npm run format` to format the code, or `npm run format:check` to check it
+without changing files. The `format:web` and `format:python` commands can also be
+run separately.
+
+The pipeline accelerator hashes its reference functions' source, including
+whitespace. After formatting those functions, run
+`.venv/bin/python scripts/pipeline_accel.py --status`. Refresh stale pins with
+`--pin` only after confirming the changes preserve behavior (or porting any logic
+changes to the accelerator), then run
+`.venv/bin/python tests/pipeline_accel_test.py`.
+
 ## Capture and build
 
 1. Choose **Record / upload head video**. Use **Record 360°** with the laptop webcam, or **Upload video** for MP4, WebM, or another format this browser can decode. Video import extracts up to 220 samples locally. The original recording and masked head PNG frames are saved in the private local scan folder. The scan panel includes a replayable source video and measured processing times; the original recording is not sent to the AI service.
@@ -19,6 +44,17 @@ Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capt
 7. **Surface**, **Geometry** and **Wireframe** show the same editable mesh. Jaw, lip corner, brow and lid controls follow the facial anchors. The **3D glasses** checkbox shows or hides the rigid accessory. **Export GLB** exports the head, texture, four morphs and separate glasses meshes. **Save editable session** retains the rig, photo texture, glasses specification and Newton cage binding.
 
 The uploaded `IMG_7496.MOV` reconstruction uses recovered rear photographs; it does not need an AI-generated rear reference. An earlier frontal-only scan used a labeled rear prediction from Codex's built-in image tool because the configured account returned a zero image-input allowance for GPT Image 2. Subsequent captures with insufficient rear views try the image API; if it is unavailable, the pipeline reports the failure and uses local material continuation from captured hair samples. It does not pretend that continuation is an AI-generated rear photograph. The image stage uses the unmodified Image Generation skill CLI at `~/.codex/skills/.system/imagegen/scripts/image_gen.py`; set `PUNCHING_FACE_IMAGE_CLI` to its location on another installation.
+
+## Reconstruction engines
+
+The scan dialog has a **Reconstruction engine** choice. It applies to the saved scan that is selected, and one scan can hold a model from each engine, so switching on a finished scan compares the two without rebuilding anything.
+
+- **PunchingFace pipeline** (default) is everything described above. It runs on this computer and produces the fitted head, hair, glasses and the Newton physics cage.
+- **Meshy cloud** sends up to four cropped, background-free views of the scan to [Meshy's multi-image-to-3D API](https://docs.meshy.ai/en/api/multi-image-to-3d): the most frontal tracked view first (Meshy treats the first image as the primary view), the widest tracked turn to each side, and the middle of the longest run of untracked frames as the far side. It works from a single frontal view, so it does not need 24 frames. The dialog shows the exact images that were sent. The result is kept as `meshy/model.glb` inside the scan folder and loads through the same import path as **Upload GLB head**, so it gets preview springs and the facial impact rig, not the Newton cage, hair strands or glasses. A loaded Meshy head survives a page reload until another model takes the scene.
+
+Meshy needs an API key from the account's console (meshy.ai, Settings, API). Put `MESHY_API_KEY=msy_...` in `.env` and restart `npm run dev`, or paste it under **Meshy API settings** in the scan dialog, which stores it in `.local/secrets/meshy.json` with owner-only permissions. The key never reaches the browser. **Test connection** shows the credit balance. A textured build costs about 30 credits (the finished task reports the real figure) and takes one to three minutes. Nothing is sent until **Create 3D face with Meshy** is pressed; a finished model is reused, and rebuilding asks first. If the server restarts or a download fails mid-task, pressing Create again follows the same Meshy task instead of paying for a new one. `MESHY_AI_MODEL`, `MESHY_TARGET_POLYCOUNT` and `MESHY_ENABLE_PBR=1` override the defaults (`latest`, 30000 triangles, no PBR maps). The header's **Photo → 3D self** checkbox is the older single-webcam-photo Meshy path; it uses the same key and does not save its result.
+
+`.venv/bin/python tests/meshy_backend_test.py` covers view choice, cutouts and the task lifecycle against a local stand-in for the API. The real API has only been exercised up to authentication: Meshy's documented test-mode key is no longer accepted, so a first real build is the remaining check.
 
 ## Newton contact and facial rig
 
@@ -32,12 +68,24 @@ Facial controls and sculpt edits update the physics rest cage. This is a visual 
 
 ## Installation and checks
 
+Python runs in separate virtual environments, each with its own requirements file, because the two halves of the project cannot share an interpreter here. The capture stack pins `open3d==0.18.0` and NumPy 1.x, which only install on Python 3.9–3.11. Newton 1.6 / Warp 1.17 require Python 3.10 or newer and run on 3.13 with NumPy 2. The environments never share a process: `npm run dev` starts each service with its own interpreter.
+
+| Environment | Python | Requirements file | Runs |
+| --- | --- | --- | --- |
+| `.venv` | 3.9–3.11 (3.9.6 here) | `requirements.txt` | capture/reconstruction API, photo pipeline, OMNI relay, sponsor server, most Python tests |
+| `.local/newton-env` | 3.10+ (3.13 here) | `requirements-newton.txt` | `physics_server.py`, `newton_face.py`, `tests/newton_test.py`, `tests/physics_sessions_test.py` |
+| `.local/format-env` | 3.10+ (3.13 here) | `requirements-dev.txt` | Black only, optional: see [Code formatting](#code-formatting) |
+| the first two | as above | `requirements-sponsors.txt` | optional Sentry SDK: see [SPONSOR_SETUP.md](SPONSOR_SETUP.md) |
+
+Each requirements file states its environment, Python range and install command in its header, and `scripts/check_python_envs.py` checks the environments against those headers. With a single Python 3.10 or 3.11 you can build every environment from that one interpreter; keep them as separate environments. Only the 3.9.6 + 3.13 pair is exercised day to day.
+
 ```sh
 npm install
-python3.9 -m venv .venv
+/usr/bin/python3 -m venv .venv         # Python 3.9–3.11 only: macOS ships 3.9 here, elsewhere use e.g. python3.11
 .venv/bin/python -m pip install -r requirements.txt
-python3.13 -m venv .local/newton-env
+python3.13 -m venv .local/newton-env   # any Python 3.10+
 .local/newton-env/bin/python -m pip install -r requirements-newton.txt
+python3 scripts/check_python_envs.py   # confirms each environment matches its requirements file
 npm run dev
 ```
 
@@ -141,13 +189,9 @@ Models: `qwen3.5-omni-flash-realtime` by default; swap to `qwen3.5-omni-plus-rea
 
 ### Setup
 
-```sh
-npm install
-python3.9 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-python3.13 -m venv .local/newton-env
-.local/newton-env/bin/python -m pip install -r requirements-newton.txt
+Install the Node packages and the Python environments as described in [Installation and checks](#installation-and-checks), then:
 
+```sh
 cp .env.example .env      # then fill in OMNI_API_KEY and any endpoints/models
 npm run dev
 ```

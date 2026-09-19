@@ -30,7 +30,7 @@ class LatencyOverlay {
     this._el = null;
     this._visible = false;
     if (typeof window !== 'undefined') {
-      window.addEventListener('keydown', event => {
+      window.addEventListener('keydown', (event) => {
         if (event.ctrlKey && (event.key === 'l' || event.key === 'L')) {
           event.preventDefault();
           this.toggle();
@@ -46,13 +46,14 @@ class LatencyOverlay {
     if (key === 'response.done') this._finalizeRow();
     // On the first text/audio delta after `response.requested`.
     if (key === 'text.delta' || key === 'audio.delta') {
-      if (!this.marks.has('response.first_delta')) this.marks.set('response.first_delta', at);
+      if (!this.marks.has('response.first_delta'))
+        this.marks.set('response.first_delta', at);
     }
     if (this._visible) this._render();
   }
 
   _newRow(at) {
-    this.history.push({t: at, marks: {}});
+    this.history.push({ t: at, marks: {} });
     if (this.history.length > this._maxHistory) this.history.shift();
   }
 
@@ -73,10 +74,17 @@ class LatencyOverlay {
     const el = document.createElement('div');
     el.id = 'omni-latency-overlay';
     Object.assign(el.style, {
-      position: 'fixed', right: '12px', bottom: '12px', zIndex: 9999,
-      font: '11px/1.35 ui-monospace, monospace', color: '#d8e7cf',
-      background: 'rgba(20,32,26,0.86)', border: '1px solid #46663a',
-      padding: '10px 12px', borderRadius: '6px', minWidth: '260px',
+      position: 'fixed',
+      right: '12px',
+      bottom: '12px',
+      zIndex: 9999,
+      font: '11px/1.35 ui-monospace, monospace',
+      color: '#d8e7cf',
+      background: 'rgba(20,32,26,0.86)',
+      border: '1px solid #46663a',
+      padding: '10px 12px',
+      borderRadius: '6px',
+      minWidth: '260px',
       pointerEvents: 'none',
     });
     document.body.append(el);
@@ -86,7 +94,12 @@ class LatencyOverlay {
   _render() {
     if (!this._el) return;
     const row = this.history[this.history.length - 1];
-    const lines = [`<b>OMNI latency</b>  <span style="opacity:.6">(Ctrl-L to hide · ${this.history.length} turns)</span>`];
+    const lines = [
+      /* HTML */ `<b>OMNI latency</b>
+        <span style="opacity:.6"
+          >(Ctrl-L to hide · ${this.history.length} turns)</span
+        >`,
+    ];
     if (!row) lines.push('<em>no turns yet</em>');
     else {
       const base = row.t;
@@ -94,14 +107,20 @@ class LatencyOverlay {
         const v = this.marks.get(key);
         if (v == null) continue;
         const rel = Math.round(v - base);
-        const bar = '<span style="display:inline-block;width:' + Math.min(180, Math.max(2, rel/2)) + 'px;height:6px;background:#749b54;vertical-align:middle;margin:0 6px"></span>';
+        const bar =
+          '<span style="display:inline-block;width:' +
+          Math.min(180, Math.max(2, rel / 2)) +
+          'px;height:6px;background:#749b54;vertical-align:middle;margin:0 6px"></span>';
         lines.push(`${label.padEnd(14, ' ')}${bar}<span>${rel} ms</span>`);
       }
     }
     // Session state (plan, connection).
     if (typeof window !== 'undefined' && window.__omniSession) {
       const s = window.__omniSession;
-      lines.push(`<hr style="border:0;border-top:1px solid #34503a;margin:6px 0">plan=<b>${s.plan}</b> · mock=${!!s.mock} · id=${s.sessionId||'-'}`);
+      lines.push(
+        /* HTML */ `<hr style="border:0;border-top:1px solid #34503a;margin:6px 0" />
+          plan=<b>${s.plan}</b> · mock=${!!s.mock} · id=${s.sessionId || '-'}`,
+      );
     }
     this._el.innerHTML = lines.join('<br>');
   }

@@ -1,17 +1,40 @@
-numpy<2
+# Capture + reconstruction environment: server.py, face_pipeline.py, reconstruction.py,
+# omni_relay.py, sponsor_server.py, scripts/ and the Python tests that do not import Newton.
+#
+# env: .venv
+# python: >=3.9,<3.12
+# install: .venv/bin/python -m pip install -r requirements.txt
+#
+# Why this Python: the pins below only have wheels for CPython 3.9-3.11. open3d 0.18.0 stops at
+# 3.11 and NumPy 1.x at 3.12, so this file cannot install on 3.12+. Newton needs 3.10+ and gets
+# its own environment (requirements-newton.txt). The dev machine uses Apple's /usr/bin/python3
+# (3.9.6). open3d 0.18.0 and pycolmap 3.13.0 are the last releases with 3.9 wheels: do not bump
+# them while any machine is on 3.9.
+#
+# Pins: exact versions for native packages the pipeline output was tuned on, major-version
+# ranges for the rest. Check every environment against these files with
+# `python3 scripts/check_python_envs.py`.
+
+# Geometry, cameras, meshes
+numpy<2  # open3d 0.18.0 is built for the NumPy 1.x ABI but only declares numpy>=1.18
+scipy>=1.13,<2
 open3d==0.18.0
-plyfile==1.0.3
-Pillow>=10,<12
-trimesh>=4,<5
 pycolmap==3.13.0
+plyfile==1.0.3
 xatlas==0.0.11
+trimesh>=4,<5
+
+# Optional trimesh backends the pipeline calls: rtree for mesh.ray (scripts/eye_shading.py);
+# shapely, networkx and mapbox-earcut for slice_plane(cap=True) (scripts/fit_head_template.py)
 networkx>=3.2,<4
-
-openai>=2,<3
-
-mapbox-earcut>=1.0,<2
+rtree>=1.2,<2
 shapely>=2,<3
+mapbox-earcut>=2,<3
 
+# Images
+Pillow>=10,<12
 opencv-python-headless>=4.10,<4.12
 
-rtree>=1.2,<2
+# No project file imports openai: scripts/predict_rear.py runs the Image Generation CLI
+# (PUNCHING_FACE_IMAGE_CLI) with this interpreter, and that CLI imports it. Keep it.
+openai>=2,<3

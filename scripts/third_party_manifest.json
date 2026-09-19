@@ -4,6 +4,26 @@
   "resolved": "2026-09-19",
   "entries": [
     {
+      "name": "sam2",
+      "kind": "repo",
+      "url": "https://github.com/facebookresearch/sam2",
+      "sha": "2b90b9f5ceec907a1c18123530e92e794ad901a4",
+      "sparse": ["sam2"],
+      "license": "Apache-2.0; checkpoint is optional and is not fetched by setup_third_party.py",
+      "fixes": "hair boundaries",
+      "purpose": "Optional local SAM2.1 native-frame mask experiment. Runs float32 on MPS in a separate modern Python environment with SAM2_BUILD_CUDA=0. Dense hairline proposals remain experimental because sparse side fades can be lost; no production mask substitution. See docs/HEAD_MASK_EXPERIMENT.md."
+    },
+    {
+      "name": "NFR_pytorch",
+      "kind": "repo",
+      "url": "https://github.com/dafei-qin/NFR_pytorch",
+      "sha": "664488e224333deb46f85279b54b6dd1d02e81b1",
+      "sparse": null,
+      "license": "MIT (code); pretrained assets are not fetched",
+      "fixes": "facial rigging",
+      "purpose": "Reference for local deformation Jacobians and area-weighted global mesh reconstruction. Browser adaptation in src/deformation-gradient.js; CUDA inference/training is not installed or used."
+    },
+    {
       "name": "ICT-FaceKit",
       "kind": "repo",
       "url": "https://github.com/USC-ICT/ICT-FaceKit",

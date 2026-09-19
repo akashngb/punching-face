@@ -31,15 +31,15 @@
 import { fistScore } from './physics.js';
 
 export const DEFAULT_TUNING = {
-  minWidth: 0.05,             // palm width in normalized image units (~1 m from a wide-FOV webcam)
-  minFractionalGrowth: 2.6,   // (dW/dt)/W — depth-invariant approach speed threshold, /s
-  minFistScore: 0.35,         // at least ~1.5/4 fingertips curled — enough to reject open-palm waves
-  minPeakSpeed: 0.65,         // 2D image-space wrist speed at trigger, /s (sqrt(dx²+dy²))
+  minWidth: 0.05, // palm width in normalized image units (~1 m from a wide-FOV webcam)
+  minFractionalGrowth: 2.6, // (dW/dt)/W — depth-invariant approach speed threshold, /s
+  minFistScore: 0.35, // at least ~1.5/4 fingertips curled — enough to reject open-palm waves
+  minPeakSpeed: 0.65, // 2D image-space wrist speed at trigger, /s (sqrt(dx²+dy²))
   minSustainedFraction: 0.55, // window-averaged fractional growth must clear this fraction of the trigger threshold
-  minVerticalUp: 0.9,         // dY/dt (negative = up on screen) for uppercut priority
-  cooldownMs: 170,            // per-type debounce
-  historyMs: 100,             // sliding window for derivative estimates
-  sideSlack: 0.08,            // buffer around center before we flip between hook/jab
+  minVerticalUp: 0.9, // dY/dt (negative = up on screen) for uppercut priority
+  cooldownMs: 170, // per-type debounce
+  historyMs: 100, // sliding window for derivative estimates
+  sideSlack: 0.08, // buffer around center before we flip between hook/jab
 };
 
 export class SlapDetector {
@@ -47,6 +47,7 @@ export class SlapDetector {
     this.tuning = { ...DEFAULT_TUNING, ...tuning };
     this.reset();
   }
+
   reset() {
     this.history = [];
     // One global cooldown — a single physical swing sweeps across sides in one motion
@@ -55,9 +56,22 @@ export class SlapDetector {
     this.state = this.#idle('waiting for hand');
     this.lastEvent = null;
   }
+
   #idle(reason) {
-    return { handDetected: false, palmWidth: 0, growth: 0, vy: 0, vx: 0, centerX: 0.5, centerY: 0.5, reason, triggered: null, landmarks: null };
+    return {
+      handDetected: false,
+      palmWidth: 0,
+      growth: 0,
+      vy: 0,
+      vx: 0,
+      centerX: 0.5,
+      centerY: 0.5,
+      reason,
+      triggered: null,
+      landmarks: null,
+    };
   }
+
   observe(landmarks, timestampMs) {
     const cutoff = timestampMs - this.tuning.historyMs * 4;
     while (this.history.length && this.history[0].t < cutoff) this.history.shift();
@@ -69,14 +83,27 @@ export class SlapDetector {
     let best = null;
     for (const lm of landmarks) {
       const w = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
-      if (!best || w > best.w) best = { w, x: (lm[0].x + lm[9].x) / 2, y: (lm[0].y + lm[9].y) / 2, points: lm };
+      if (!best || w > best.w)
+        best = {
+          w,
+          x: (lm[0].x + lm[9].x) / 2,
+          y: (lm[0].y + lm[9].y) / 2,
+          points: lm,
+        };
     }
     this.history.push({ t: timestampMs, x: best.x, y: best.y, w: best.w });
     // Derivative vs sample ~historyMs ago (pick the newest sample no newer than target).
     const target = timestampMs - this.tuning.historyMs;
     let prior = null;
-    for (const s of this.history) { if (s.t <= target) prior = s; else break; }
-    let growth = 0, vy = 0, vx = 0, fractional = 0, peakSpeed = 0;
+    for (const s of this.history) {
+      if (s.t <= target) prior = s;
+      else break;
+    }
+    let growth = 0,
+      vy = 0,
+      vx = 0,
+      fractional = 0,
+      peakSpeed = 0;
     if (prior && timestampMs > prior.t) {
       const dt = (timestampMs - prior.t) / 1000;
       growth = (best.w - prior.w) / dt;
@@ -93,22 +120,31 @@ export class SlapDetector {
     let sustained = 0;
     const sustainedStart = timestampMs - 120;
     let recentOldest = null;
-    for (const s of this.history) { if (s.t >= sustainedStart) { recentOldest = s; break; } }
+    for (const s of this.history) {
+      if (s.t >= sustainedStart) {
+        recentOldest = s;
+        break;
+      }
+    }
     if (recentOldest && recentOldest !== this.history[this.history.length - 1]) {
       const newest = this.history[this.history.length - 1];
       const spanDt = (newest.t - recentOldest.t) / 1000;
       if (spanDt > 0.02) {
         const meanW = 0.5 * (recentOldest.w + newest.w);
-        sustained = ((newest.w - recentOldest.w) / spanDt) / Math.max(meanW, 1e-3);
+        sustained = (newest.w - recentOldest.w) / spanDt / Math.max(meanW, 1e-3);
       }
     }
     const fist = fistScore(best.points);
-    let reason = 'ready', triggered = null;
+    let reason = 'ready',
+      triggered = null;
     if (best.w < this.tuning.minWidth) {
       reason = `palm far (w=${best.w.toFixed(2)} < ${this.tuning.minWidth})`;
     } else if (fractional < this.tuning.minFractionalGrowth) {
       reason = `slow approach (${fractional.toFixed(1)}/s < ${this.tuning.minFractionalGrowth}/s)`;
-    } else if (sustained < this.tuning.minFractionalGrowth * this.tuning.minSustainedFraction) {
+    } else if (
+      sustained <
+      this.tuning.minFractionalGrowth * this.tuning.minSustainedFraction
+    ) {
       reason = `unsustained (${sustained.toFixed(1)}/s below ${(this.tuning.minFractionalGrowth * this.tuning.minSustainedFraction).toFixed(1)}/s)`;
     } else if (fist < this.tuning.minFistScore) {
       reason = `open hand (fist=${fist.toFixed(2)} < ${this.tuning.minFistScore}) — wave, not punch`;
@@ -118,9 +154,10 @@ export class SlapDetector {
       let side;
       // Uppercut needs (a) fast upward vy, (b) vertical dominates horizontal drift,
       // (c) hand is near-center in x. Otherwise a hook with slight rise gets stolen.
-      const isUppercut = vy < -this.tuning.minVerticalUp
-        && Math.abs(vy) > Math.abs(vx) * 1.4
-        && Math.abs(best.x - 0.5) < 0.28;
+      const isUppercut =
+        vy < -this.tuning.minVerticalUp &&
+        Math.abs(vy) > Math.abs(vx) * 1.4 &&
+        Math.abs(best.x - 0.5) < 0.28;
       // Camera preview is mirrored via CSS (scaleX(-1)), so the user sees their right hand on
       // the right of the screen. MediaPipe still reports unmirrored coords, so we flip the side
       // classification here: raw x > 0.5 is MediaPipe's "right of frame" = user's LEFT hand.
@@ -133,12 +170,39 @@ export class SlapDetector {
       } else {
         this.lastTrigger = timestampMs;
         const type = side === 'up' ? 'uppercut' : side === 'jab' ? 'jab' : 'hook';
-        triggered = { type, side, growth, vy, vx, palmWidth: best.w, centerX: best.x, centerY: best.y, fractional, fist, peakSpeed, timestampMs };
+        triggered = {
+          type,
+          side,
+          growth,
+          vy,
+          vx,
+          palmWidth: best.w,
+          centerX: best.x,
+          centerY: best.y,
+          fractional,
+          fist,
+          peakSpeed,
+          timestampMs,
+        };
         this.lastEvent = triggered;
         reason = `${type.toUpperCase()} · ${side.toUpperCase()}`;
       }
     }
-    this.state = { handDetected: true, palmWidth: best.w, growth, vy, vx, fractional, fist, peakSpeed, centerX: best.x, centerY: best.y, reason, triggered, landmarks: best.points };
+    this.state = {
+      handDetected: true,
+      palmWidth: best.w,
+      growth,
+      vy,
+      vx,
+      fractional,
+      fist,
+      peakSpeed,
+      centerX: best.x,
+      centerY: best.y,
+      reason,
+      triggered,
+      landmarks: best.points,
+    };
     return triggered;
   }
 }
