@@ -85,23 +85,49 @@ cv-debug.js / app       mesh raycast along reported travel direction,
 fist fit (`fist-pose.js`: Horn alignment onto a learned per-hand template, Gauss-Newton
 translation along the observed rays, measured covariance). Gives metric camera-frame position,
 orientation (knuckle normal), closure, and an honest per-axis variance. When the fit fails but
-landmarks exist, a span-prior depth fallback produces a degraded sample with wide variance rather
-than no sample.
+landmarks exist, a degraded sample keeps the trajectory alive — but ONLY while a recent rigid
+fit can lend it depth. Its depth is DEPTH-INERTIAL, carried from that anchor, never derived from
+the apparent span: apparent size conflates rotation with distance by construction (a stationary
+fist rotating as the elbows lift halves its knuckle span, which span-depth read as a
+tens-of-centimetres phantom approach-and-retreat; blur widening it the other way fabricated
+superhuman closing speeds).
+
+With no anchor there is no honest depth to be had, so **nothing enters the trajectory**: the hand
+is merely OBSERVED (`observe()`), which keeps its identity alive — association prediction,
+liveness, rest lineage — without inventing a position. Being tracked and being measured are
+different things, and the tiers now say so. The old anchor-less `loose` tier guessed depth from
+apparent knuckle width in exactly this situation; since a punch lasts ~200 ms while "no rigid fit
+for 400 ms" only happens to a fist parked at the lens, it never once carried a real punch — it
+only fabricated approaches out of fingers clipping the frame, at about one phantom jab per second
+for as long as a fist was held out. It is gone.
 
 **Motion stream** (coarse, blur-proof): frame differencing at 96 px wide → connected components →
 up to 2 blobs with centroid, mass, rms spread, block-matched mean translation and expansion rate
 (similarity-flow fit). Motion blur *helps* this stream. It corroborates approaches, dates
-reversals when landmarks are gone, and bridges dropout gaps with low-weight samples. It never
-fires an event by itself.
+reversals when landmarks are gone, bridges dropout gaps with low-weight samples, and — critically
+for dedup — **steers identity**: each slot keeps a blob-informed predicted position (the blob's
+measured flow updates the velocity, its centroid the position), so when landmarks die mid-arc the
+prediction follows the fist along the arc instead of extrapolating the stale pre-blur velocity.
+Reacquired landmarks then land back inside the association gate of the identity they belong to,
+which is what stops one punch forking into two identities in the first place. Blob centroids are
+arm-biased, so they steer prediction only; the slot's measured position and landmark liveness
+stay landmark-owned. The stream never fires an event by itself.
 
 ### Slots, not tracks
 
 At most two persistent **slots** hold time-ordered sample buffers. Association is
-predicted-position nearest-neighbour with a gate that grows with the time gap (as before), but a
-slot is a *bucket of evidence*, not an event owner: an association mistake means some samples land
-in the other bucket, and the damage is contained by candidate arbitration below — there is no
-per-frame decision that can double-fire. MediaPipe handedness never keys identity (the front of a
-fist is chirally ambiguous); it is only one weighted vote in per-event hand classification.
+predicted-position nearest-neighbour: the position comes from the blob-informed prediction (which
+follows a curving, blur-dead fist — see the motion stream above), while the gate grows with
+*landmark* silence, because identity uncertainty grows while nobody has actually seen the hand,
+however confidently the motion stream tracked something. A slot is a *bucket of evidence*, not an
+event owner: an association mistake means some samples land in the other bucket, and the damage
+is contained by candidate arbitration below — there is no per-frame decision that can
+double-fire. MediaPipe handedness never keys identity (the front of a fist is chirally
+ambiguous); it is only one weighted vote in per-event hand classification.
+
+Slots also learn their **rest position**: a fist sustainedly slow in the image (many consecutive
+slow samples — an apex hold is a few frames, a guard is many) accrues an EMA of where it rests.
+This is the hand-lineage evidence the classifier leans on below.
 
 ### The range signal and retrospective extraction
 
@@ -128,7 +154,12 @@ Extraction runs ~2–4 frames behind real time on the buffer, as a pure function
   window's PEAK closing, not the last sample's, because a hook that blurs out in its tangential
   phase was closing hard 100 ms earlier ("losing the fist at full extension IS the punch", kept
   from the old design as a first-class path, not a sweep-up hack). The motion stream either
-  carries the trajectory to a measurable reversal or a ~150 ms timeout closes it.
+  carries the trajectory to a measurable reversal or a timeout closes it — a timeout running from
+  the last EVIDENCE, blob bridge included, not from landmark death: while blobs still carry the
+  trajectory the punch is not lost, it is heading for a bracketed apex or for landmark
+  reacquisition into the same slot. Censoring on landmark silence alone decided the event ~160 ms
+  into the blur, from half the punch, and the better-solved continuation then had to be
+  deduplicated away.
 - Gates on the candidate, all physical quantities measured on the fitted window: travel
   (range closed from the recent maximum, never reaching back across a previous fire) ≥
   `minTravel`, peak fitted closing speed ≥ `minPeak`, fist-closure evidence over the approach.
@@ -142,6 +173,29 @@ Extraction runs ~2–4 frames behind real time on the buffer, as a pure function
   ~0.95 m/s against the 1.2 gate), and the birth speed itself is the evidence the punch was fast. Minima that no approach ever drove into (noise wiggles at guard, the tail
   of a retraction) are consumed silently, so the last rejection reason on the readout always
   names the gate that turned a real punch away.
+- **Speed is a windowed linear slope over rigid samples.** The quadratic local fit is right for
+  trajectories but wrong for sparse noisy speed reads: three rigid points ~100 ms apart fit a
+  quadratic exactly, so 1 cm of depth noise becomes metres-per-second of phantom slope — a
+  1.5 m/s jab reported anywhere from 1.1 to 3.4 depending on frame phase, and a real jab was
+  rejected at "peak 1.13 < 1.20". The linear window reads the punch's sustained closing —
+  stable, honest, ~25% under the true instantaneous peak — and the speed gates are calibrated to
+  it (`minPeak` 1.0, `EDGE_PEAK` .35). Lazy reaches measure 0.2–0.5 on the same scale.
+- **The approach must be measured, not manufactured**: the range a candidate claims to have
+  closed must be substantially witnessed by MEASURED samples — rigid fits plus anchored `span`
+  fallbacks, whose lateral is honest and whose frozen depth can only understate closure (≥ 40%
+  of the claim, or a full unsoftened `minTravel` on measured evidence alone; rigid-only
+  witnessing starved blurred hooks, which close range mostly laterally). Blob expansion may
+  CARRY an approach through blur — a real punch is rigid-tracked
+  until its last ~100 ms, and measured samples at the start of the retraction still witness how
+  deep it got — but they can never constitute one. The same rule governs the re-arm: the withdrawal that lets a fist punch again
+  must be rigid-OBSERVED, because fabricated depth swings used to clear it and let the next
+  fabricated dip fire.
+- **A punch ARRIVES**: its apex must come within `strikeRange` (default 45 cm) of the head, with
+  censored candidates judged on imminent arrival (trailing closing × ~120 ms). Approach shape
+  alone is not sufficient evidence — any inward lateral guard shift closes range geometrically
+  (by the lateral slack r−z, 6–11 cm from a normal guard, squarely inside the travel gates) and
+  brackets itself on the shift back, but its range minimum is the guard distance itself; no jab,
+  hook or uppercut terminates half a metre from the face.
 - **Instant fire**: r̂ crossing `contactDepth` while closing fast emits immediately (latency for
   deep straight punches) and consumes the window through the upcoming apex, so the apex cannot
   fire a second time. The line sits deep (12 cm) on purpose: a committed jab crosses a 20 cm line
@@ -157,14 +211,35 @@ timer is involved in this property — it is the shape of the signal.
 ### Arbitration: dedup as a structural property
 
 Each emitted event **consumes** its slot's samples through the confirmation time; candidate search
-never reaches back across the consumption boundary. Across slots, a new candidate is merged into a
-just-emitted event when their apexes are close in time (< 250 ms) *and* their terminal windows
-overlap in image space — that is one fist seen under two identities (the blur-teleport case), and
-the merged solve uses the union of both windows. Distinct-region candidates are allowed through at
-≥ 120 ms spacing, so a real jab–cross combo is two events while a fragmented single punch is one.
+never reaches back across the consumption boundary. Across slots, another view of a just-emitted
+strike is recognised two ways:
+
+- **Image support** (< 280 ms, < 0.22 image units): a candidate at the same spot as the event is
+  the same fist seen twice — the duplicate-detection case, where MediaPipe reports one fist as
+  two overlapping hands.
+- **Temporal exclusivity** (< 400 ms): blur can displace the image position arbitrarily far
+  between two sightings of one fist — a hook crosses a third of the frame while its landmarks are
+  dead — so no image gate can catch a *sequential* fragment. But blur cannot make one fist appear
+  twice AT ONCE: two real fists coexist on screen, fragments take turns. A candidate whose
+  identity never coexisted with the identity that fired (landmark spans overlapping < ~60 ms) is
+  the same fist re-tracked, with one exemption: when BOTH sightings independently observed a
+  complete punch (approach → apex → sustained retreat) they are two punches thrown through a
+  tracking dropout — a real double — while a censored or instant fire means the evidence stopped
+  mid-punch and whatever continues it belongs to it. This is what lets a jab–cross combo whose
+  detections alternate (only one hand tracked at a time) stay two events while a
+  censored-fragment-plus-reacquired-landing stays one.
+
 Misses (trajectory crosses wide of the head) are decided by the same extractor and take part in
 the same arbitration, which is what retires the old app-level "a miss right after a hit is the
 same punch" patch.
+
+One zone rule sits after the solve: an event arriving BELOW the head (contact or aim under
+~1.15 × the head's half-height) is a chest/shoulder-height strike, and there is no head there to
+hit — it is ignored outright (no hit, no miss, no log line; counted as `low` on the readout).
+It still consumes its evidence and enters arbitration memory, so its fragments cannot resurface.
+The check runs after classification steered the entry, deliberately: an uppercut travels THROUGH
+chest height, and only its classification (which walks the arrival to the chin) proves it was
+not a body shot.
 
 ### The solver: every reported number from the same fit
 
@@ -217,25 +292,95 @@ Given the event window (union of merged windows):
   normalised direction ray (no magnitude — a jab's lateral direction is pure noise, entries
   teleported to either cheek) and a sweep-vector walk from the apex (solved from the trajectory
   END).
-- **Type**: classified once, from full-window evidence: terminal direction, knuckle normal
-  (averaged over valid terminal samples), path curvature (velocity-direction rotation between the
-  first and last trustworthy probes — measured ~0.9 rad for a synthetic hook against ~0.05 for a
-  jab and ~0.1 for a wide straight, so the 0.2 rad auxiliary threshold separates them cleanly),
-  entry origin (below head → uppercut prior, corroborated), and the punch's net **image sweep**.
-  Truncated uppercuts get two dedicated carriers: the rise is low, fast, blurred and often below
-  the frame, so the landmarker locks on only at the top where the upward velocity is spent — the
-  measured direction reads near-pure −z and every travel-gated branch fails. But the fist's
-  ORIENTATION is measured at the apex, exactly where tracking is good, so emphatic knuckles-up
-  (n.y > .55, a jab's wrist→knuckle axis points at the target however the palm rotates) carries
-  the classification with travel only required not to contradict; a strongly upward image sweep
-  does the same. The classification then carries the entry: a truncation-reconstructed uppercut's
-  arrival walks DOWN to the chin, since the class itself asserts the punch came from below.
-  The sweep is the blur-proof feature: a hook crosses a third of the frame laterally even when
-  every depth estimate is garbage and a censored punch's direction degraded to its chord, so it is
-  what keeps a blur-censored hook a hook. Overwhelming lateral travel is checked before any
-  uppercut prior — a rising hook must not fall into an uppercut branch on its upward tilt.
+- **Type**: classified once, from full-window evidence — and the evidence is **image-first**.
+  The image plane is what this camera measures best, so where the punch's net **image sweep**
+  (measured over the raw windup, so a mid-approach gate rejection cannot clip it) and the fitted
+  3D direction disagree, the sweep wins: a hook translates across the image, an uppercut climbs
+  it, a jab barely moves — it looms. The fitted direction is depth-starved exactly at contact
+  (rigid fit dead → inertial depth → velocity-z collapses → the terminal direction degrades to
+  pure lateral/vertical noise), which is how straight jabs read live as hooks and uppercuts.
+  **Travel itself is solved on rigid samples only.** A fallback sample's depth is frozen, so a
+  velocity fitted through one reads dz ≈ 0 — and for a straight punch, whose entire velocity IS
+  dz, the normalised direction then collapses onto leftover lateral/vertical noise, which reads
+  as a rise or a sweep. Jabs were logged live as uppercuts and hooks for exactly this reason.
+  Position may use every sample (image position is honest in all tiers); velocity may not.
+  Hence two hard rules: **no hook verdict without image support** (sweep ≥ .06 image units —
+  depth-starved noise moves the image a few hundredths; a truncated hook still sweeps ≥ ~.09
+  even when the apex rewind collapsed its window), and **upward image motion outranks every
+  orientation prior**. The sweep itself is **divergence-corrected** first: an approaching fist's
+  image position diverges radially away from the frame centre (u−.5 ∝ x/z), so a jab above the
+  low-slung laptop camera "rises" ~.2 image units with zero vertical motion — the outward-radial
+  component is looming, not travel, and is removed before classification (skipped near the
+  centre, where divergence is negligible).
+
+  **Where the fist POINTS is measured in the image, not in 3D.** A jab arrives with its knuckles
+  square at the camera and an uppercut with them up, so the wrist→knuckle axis foreshortens to
+  nearly nothing for one and stands tall up the frame for the other — the single most obvious
+  difference between the two punches. It must be read in the image plane: in 3D that axis lies
+  along the view axis for a straight punch, i.e. almost entirely in the DEPTH component, and
+  MediaPipe's depth compression shrank it until the small honest vertical dominated after
+  normalisation, reading jabs as uppercuts. The shell measures it from raw landmarks in
+  fist-widths (`axis`), the core averages it over the terminal window (`handAxis`), and on real
+  geometry a fist aimed at the camera reads ~0.16 while an uppercut reads 0.4–0.9. The middle
+  band is left UNDECIDED, deferring to travel.
+
+  **No uppercut verdict without image-plane evidence of a rise** — an upward sweep across the
+  frame, or an entry from below the head. Nothing depth-derived may substitute. Three separate
+  live misclassifications had one shape: a straight jab at 10–14 cm where the fitted direction,
+  the 3D knuckle normal and (through perspective) even the image hand axis all tilted "up" while
+  the punch demonstrably never rose in the frame. Rising up the frame is what an uppercut IS, so
+  that is the signal to require. The one exemption is orientation from a TRUSTWORTHY distance:
+  inside ~25 cm the fist subtends a huge angle and its wrist sits far behind its knuckles, so
+  every orientation reading tilts upward whatever the punch is doing; beyond that range
+  orientation is sound, which is what still recognises a top-only uppercut whose rise happened
+  below the frame.
+
+  **Which FACE of the hand shows completes the shape** (`facing`: knuckle-row span relative to
+  hand scale, shipped with the axis). A guard fist is ALSO vertical — same axis as an uppercut —
+  but it is seen EDGE-ON: back of the fist to the side, so the knuckle row points away from the
+  camera and its apparent span collapses. Measured: guard ~.11 (a 20°-turned guard still only
+  .40) against 1.0 for every face-on punch, so the .55 threshold has real margin. Uppercuts and
+  hooks both show the BACK of the fist; guard shows its edge — so no orientation verdict is
+  allowed from an edge-on hand (idling fists in guard were firing "uppercut" purely on their
+  vertical axis; the axis measure even divided by the collapsed span, inflating it). The same
+  measure gives hooks their hand-shape carrier: a face-on fist with knuckles to the SIDE
+  (|du| > .55) plus lateral travel is a hook even when the apex rewind collapsed its sweep, and
+  it counts as hook image-evidence alongside the sweep.
+
+  **Orientation may not overrule clean travel**, though. Near the lens the fist fills the frame
+  and perspective is extreme: the wrist sits much farther from the camera than the knuckles, so
+  it projects low and the measured axis "stands up" even for a dead-straight jab — observed live
+  at 10 cm range, logged LEFT UPPERCUT with the knuckles plainly facing the camera. So when the
+  fitted travel says the punch drove straight in (dz < −.80, |dy| < .30, lateral < .45), an
+  upward axis needs corroboration from an independent sign of a rise — entry from below, or an
+  upward image sweep — before it can call an uppercut. A real uppercut supplies one of those even
+  when blur truncates its travel, which is what keeps truncated uppercuts registering.
+
+  A weaker fallback veto applies when no image axis is available (blob-only windows):
+  **a fist pointing more FORWARD than up (n.y < |n.z|) is never an uppercut** — the knuckle normal is the wrist→knuckle axis, which
+  aims at the target on a straight punch and upward on an uppercut. An earlier veto band
+  (n.y < .35) left a gap: ordinary jab form angles the fist up 30–50°, putting n.y at .45–.75,
+  unvetoed and close enough to the orientation branches to tip a jab into 'uppercut' on noise.
+  Each classification branch is named, and the branch that decided ships on the event as `why`
+  (shown in the impact log), so a misclassification reports which evidence convinced it. The 3D direction, knuckle normal, curvature (~0.9 rad for a hook vs
+  ~0.05 for a jab) and entry origin (below head → corroborated uppercut prior) then resolve
+  whatever the sweep left ambiguous. Truncated uppercuts keep a dedicated carrier: the rise is
+  low, fast, blurred and often below the frame, so the landmarker locks on at the top where the
+  upward velocity is spent — there, EMPHATIC knuckles-up (n.y > .75; ordinary jab form angles
+  the fist to ~.5–.7, which at the old .55 threshold read jabs as uppercuts) carries the class
+  with the image only required not to contradict. The classification then carries the entry: a
+  truncation-reconstructed uppercut's arrival walks DOWN to the chin, since the class itself
+  asserts the punch came from below — which also decides whether the below-head ignore rule
+  applies, so classification quality gates registration for uppercuts.
 - **Hand** (left/right of the *puncher*): a weighted vote in which physically-grounded geometry
-  outranks MediaPipe's guess — (1) the **wrist trail**: the forearm exits toward its own shoulder,
+  outranks MediaPipe's guess. The two strongest votes are not in the punch at all — they are
+  **lineage**: (0a) where this identity *rested* before it flew (the slot's learned rest
+  position; fists guard on their own side, the puncher's right at low u, and the guard was
+  observed while tracking was good, however badly the punch itself blurred), and (0b)
+  **elimination**, cast only when the striker has no rest history of its own (a mid-flight
+  birth): a fist visibly resting somewhere else right now is not the fist that just landed, so
+  the punch belongs to the other hand. The within-window votes follow —
+  (1) the **wrist trail**: the forearm exits toward its own shoulder,
   measured as the windowed mean of the METRIC lateral wrist-minus-knuckles offset (metric, not
   image-space: the wrist is deeper than the knuckles and perspective drags deeper points toward
   the image centre, which reads as the wrong hand for any laterally-offset fist); (2) **metric
@@ -244,8 +389,12 @@ Given the event window (union of merged windows):
   over the window; (3) entry side, cast ONLY when trustworthy — a slow guard-anchored birth or a
   genuine outer-edge entry; a hook first detected mid-arc near frame centre must stay mute here,
   which is exactly how right hooks used to get logged as left; (4) travel azimuth (a right hook
-  drives toward head −x), weighted up for strongly lateral punches; (5) the flip-corrected
-  MediaPipe label as the weakest vote. The per-event tallies ship on the event as `handVotes`.
+  drives toward head −x), weighted up for strongly lateral punches; (5) the landmarker's label
+  as the weakest vote — NOTE: the vendored bundle (tasks-vision 0.10.32) names the PHYSICAL hand
+  on an unmirrored feed, i.e. it does NOT apply MediaPipe's documented selfie assumption
+  (verified live: interpreting it selfie-style swapped every overlay letter); declared-mirrored
+  feeds are label-flipped at the shell before the vote. The per-event tallies ship on the event
+  as `handVotes`.
 
 ### Conventions (fixed facts of the setup, not settings)
 
@@ -280,8 +429,12 @@ the head-frame mapping and `entryPoint` ellipsoid; all behavioural tests, ported
 ## Invariants the tests pin
 
 - One physical punch → exactly one event, under handedness flicker, track fragmentation,
-  landmark dropout at the apex, and any single-frame noise.
+  landmark dropout at the apex, any single-frame noise — and however long the fist is HELD at
+  full extension afterwards (fabricated depth neither qualifies a punch nor clears a re-arm).
 - Retraction, guard drift, slow reaches, twitches, and constant-range lateral sweeps never fire.
+- Guard shifting — lateral motion at unchanged distance — never fires: a punch must arrive
+  within `strikeRange` of the head.
+- Chest/shoulder-height arrivals are ignored outright; only the head can be hit.
 - Jab/hook/uppercut land on front/cheek/chin respectively, with direction read at contact
   (a hook's direction is its terminal tangent, not the mid-arc chord).
 - A jab–cross combo ≥ ~250 ms apart is two events.

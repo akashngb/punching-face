@@ -18,11 +18,14 @@ root.innerHTML=`
       <ol id="events"><li>Rest the phone on your stomach facing up at the screen, then raise both fists into the glowing arcs at the bottom corners until the meter fills. That pose is your guard.</li></ol>
     </section>
     <section class="settings" aria-label="Calibration">
-      <label>MIN PUNCH SPEED <output id="speed-value">1.2 m/s</output><input id="minspeed" type="range" min="2" max="40" value="12"></label>
+      <label>MIN PUNCH SPEED <output id="speed-value">1.0 m/s</output><input id="minspeed" type="range" min="2" max="40" value="10"></label>
       <label>MIN PUNCH REACH <output id="reach-value">8 cm</output><input id="reach" type="range" min="2" max="30" value="8"></label>
       <label>INSTANT-FIRE DEPTH <output id="contact-value">12 cm</output><input id="contact" type="range" min="5" max="45" value="12"></label>
+      <label>STRIKE RANGE <output id="strike-value">45 cm</output><input id="strike" type="range" min="25" max="80" value="45"></label>
       <label>PUNCH AREA WIDTH <output id="area-value">22 cm</output><input id="area" type="range" min="10" max="60" value="22"></label>
       <label>TARGET CAM FOV <output id="fov-value">60°</output><input id="fov" type="range" min="40" max="100" value="60"></label>
+      <label>MODEL SCALE <output id="zoom-value">130%</output><input id="zoom" type="range" min="100" max="240" value="130"></label>
+      <label>IMPACT DROP <output id="drop-value">0 cm</output><input id="drop" type="range" min="0" max="20" value="0"></label>
       <details>
         <summary>First-person camera</summary>
         <label>PHONE → GUARD <output id="guard-value">25 cm</output><input id="guard" type="range" min="15" max="35" value="25"></label>
@@ -36,6 +39,7 @@ root.innerHTML=`
     <section class="cameras" aria-label="Cameras">
       <article class="webcam" aria-label="Target camera preview">
         <video id="target-video" playsinline muted></video>
+        <canvas id="target-overlay" aria-hidden="true"></canvas>
         <header>TARGET · collision authority</header>
         <footer><span id="target-status" role="status">OFF</span>
           <select id="target-source" aria-label="Target camera"><option value="">Choose camera…</option></select>
@@ -59,6 +63,17 @@ renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=T
 const scene=new THREE.Scene();scene.background=new THREE.Color('#07100d');
 const camera=new THREE.PerspectiveCamera(60,1,.01,10);camera.position.set(0,0,0);camera.lookAt(0,0,-.65);
 const target=new THREE.Group();target.position.z=-.65;scene.add(target);const targetMeshes=[],targetSize=new THREE.Vector3();
+// The head's reach from the group's ORIGIN, which is where the mesh actually sits — the head is
+// asymmetric about it (more skull above than jaw below), so framing has to respect each side
+// separately or the chin drops off the bottom of the screen.
+const headExtent={top:0,bottom:0,halfWidth:0};
+// The whole object (head + neck + shoulders). This is what the ORIGINAL framing fitted, and it
+// stays the framing baseline: deriving a fit from the head alone kept overshooting, because the
+// mesh keeps geometry below the jaw that the view still has to hold. Zoom multiplies that
+// baseline instead of replacing it, so "scaled up from where it was" means exactly that.
+const bustSize=new THREE.Vector3();
+// Constant downward shift applied to every reported impact, in metres. Tuned live.
+let impactDrop=0,modelZoom=1.3;
 const hands=[new VirtualHand(-1),new VirtualHand(1)];for(const hand of hands){hand.visible=false;scene.add(hand);}
 const tracking=new PovTracking(video,setStatus,{maskURL,guardDepth:.25,targetDistance:.65,fovDegrees:camera.fov,onMask});
 // A fist seen from behind hides its fingertips, so fistScore reads low on the very hand that is
@@ -82,9 +97,12 @@ function setTargetStatus(message){$('target-status').textContent=message;}
 // radius scaled up alongside the head keeps hit generosity proportional to what the player sees.
 const sweepFist=sweep=>collider.sweep({...sweep,radius:(sweep.radius??.042)*target.scale.x});
 function fitTarget(){
-  if(!targetSize.y)return;
+  if(!bustSize.y)return;
   const distance=-target.position.z,viewHeight=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov)*.5),viewWidth=viewHeight*camera.aspect;
-  target.scale.setScalar(Math.max(1,Math.min(viewHeight*.92/targetSize.y,viewWidth*.8/targetSize.x)));
+  // The original baseline fit, times MODEL SCALE. The model does not move — only its size
+  // changes — so the head sits where it always did, just larger.
+  const baseline=Math.max(1,Math.min(viewHeight*.92/bustSize.y,viewWidth*.8/bustSize.x));
+  target.scale.setScalar(baseline*modelZoom);
   target.updateMatrixWorld(true);
 }
 function resize(){const width=stage.clientWidth,height=stage.clientHeight,pixelRatio=Math.min(devicePixelRatio,2);renderer.setSize(width,height,false);camera.aspect=width/height;camera.updateProjectionMatrix();armCanvas.width=Math.round(width*pixelRatio);armCanvas.height=Math.round(height*pixelRatio);fitTarget();}
@@ -185,6 +203,88 @@ function drawGuardMarks(){
     armContext.restore();
   }
 }
+// The pipeline's view of the world, drawn onto the target preview so "why didn't that punch
+// register" is visible instead of inferred. Two colours, one meaning each: GREEN is a fist being
+// tracked, YELLOW is the moment a punch was classified and logged (the ring flashes yellow and
+// names the punch for ~450 ms). A dashed ring means the identity is coasting on prediction
+// because landmarks dropped out; a hollow ring means the hand is seen but not measurable in 3D
+// (no pose solve, no recent fit to carry depth from), which is the state where punches cannot
+// register. Labels carry the puncher's hand, the fist's live range, and 'spent' when a landed
+// punch has not yet been seen withdrawing. The preview is displayed mirrored (CSS scaleX(-1)),
+// so x is flipped here in code and text stays readable.
+const targetOverlay=$('target-overlay'),targetOverlayContext=targetOverlay.getContext('2d');
+const TRACK_GREEN='#b9ff9e',IMPACT_YELLOW='#ffef65',IMPACT_FLASH_MS=450;
+let lastImpactAt=-1e9,lastImpactText='';
+function drawTargetOverlay(now){
+  const canvas=targetOverlay,ctx=targetOverlayContext,dpr=Math.min(devicePixelRatio,2);
+  const width=Math.round(canvas.clientWidth*dpr),height=Math.round(canvas.clientHeight*dpr);
+  if(!width||!height)return;
+  if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+  ctx.clearRect(0,0,width,height);
+  if(!targetTracking.active||!targetVideo.videoWidth)return;
+  const results=targetTracking.results;
+  const cover=Math.max(width/targetVideo.videoWidth,height/targetVideo.videoHeight);
+  const coverWidth=targetVideo.videoWidth*cover,coverHeight=targetVideo.videoHeight*cover;
+  const offsetX=(width-coverWidth)/2,offsetY=(height-coverHeight)/2;
+  const X=x=>offsetX+(1-x)*coverWidth,Y=y=>offsetY+y*coverHeight;
+  ctx.lineJoin='round';ctx.lineCap='round';
+  const flash=now-lastImpactAt<IMPACT_FLASH_MS;
+  const raw=results?.landmarks??[];
+  for(let i=0;i<raw.length;i++){
+    const points=raw[i];if(points?.length!==21)continue;
+    ctx.strokeStyle=flash?IMPACT_YELLOW+'dd':TRACK_GREEN+'cc';ctx.lineWidth=1.2*dpr;
+    ctx.beginPath();
+    for(const [a,b] of LINKS){ctx.moveTo(X(points[a].x),Y(points[a].y));ctx.lineTo(X(points[b].x),Y(points[b].y));}
+    ctx.stroke();
+  }
+  ctx.font=`700 ${Math.round(9*dpr)}px ui-monospace,monospace`;ctx.textBaseline='middle';
+  // The punch that just landed, announced ONCE — it belongs to the strike, not to any identity
+  // (drawing it per slot printed the same punch twice whenever one fist wore two identities).
+  // Carries the classifier's deciding branch so a misread names its own cause on screen.
+  if(flash&&lastImpactText){
+    const w=ctx.measureText(lastImpactText).width;
+    ctx.fillStyle='#07100de6';ctx.fillRect(width/2-w/2-6*dpr,6*dpr,w+12*dpr,17*dpr);
+    ctx.fillStyle=IMPACT_YELLOW;ctx.textAlign='center';
+    ctx.fillText(lastImpactText,width/2,15*dpr);
+    ctx.textAlign='start';
+  }
+  for(const slot of targetTracking.slots.values()){
+    const last=slot.samples[slot.samples.length-1];if(!last)continue;
+    const coasting=now-slot.lastSeen>90;
+    // Measurable = a 3D-solved sample within the last moment. Not measurable means the hand is
+    // visible but its depth is unknown, which is precisely when punches cannot register.
+    const measured=last.quality==='rigid'&&now-last.t<220;
+    const [pu,pv]=coasting?slot.predictAt(now):[slot.u,slot.v];
+    // slots live in the extractor's unmirrored convention; the preview shows the raw frame
+    const x=X(targetTracking.mirrored?1-pu:pu),y=Y(pv);
+    const color=flash?IMPACT_YELLOW:TRACK_GREEN;
+    ctx.setLineDash(coasting?[5,4]:[]);
+    ctx.strokeStyle=color;ctx.lineWidth=(measured?2.4:1.2)*dpr;
+    ctx.beginPath();ctx.arc(x,y,10*dpr,0,Math.PI*2);ctx.stroke();
+    if(measured){ctx.fillStyle=color+'33';ctx.fill();}
+    ctx.setLineDash([]);
+    // The vendored landmarker names the PHYSICAL hand on an unmirrored feed (no selfie flip),
+    // and mirrored feeds are label-corrected at the shell — so the majority label IS the hand.
+    const hand=slot.label==='Left'?'L':slot.label==='Right'?'R':'?';
+    // The fist's own aim, measured in the image: 'fist>' = knuckles at the camera (straight
+    // punch), 'fist^' = knuckles up (uppercut), blank = in between, where travel decides.
+    // 'fist>' = knuckles at the camera (straight), 'fist^' = back-on knuckles up (uppercut),
+    // 'fist-' = back-on knuckles sideways (hook), 'edge' = seen edge-on (guard) — no orientation
+    // verdicts are allowed from an edge-on hand.
+    const ax=last.axis,axLen=ax?Math.hypot(ax.du,ax.dv):0;
+    const faceOn=(ax?.facing??1)>=.55;
+    const aim=!ax?'':!faceOn?' edge':axLen<.32?' fist>'
+      :ax.dv>.40&&ax.dv>Math.abs(ax.du)*1.3?' fist^'
+      :Math.abs(ax.du)>.55&&Math.abs(ax.du)>Math.abs(ax.dv)*1.3?' fist-'
+      :ax.dv<-.40&&-ax.dv>Math.abs(ax.du)*1.3?' fistv':'';
+    const text=`${hand} ${(last.r*100).toFixed(0)}cm${aim}${slot.rearm?' spent':coasting?' coast':measured?'':' no depth'}`;
+    const textWidth=ctx.measureText(text).width;
+    ctx.fillStyle='#07100dcc';
+    ctx.fillRect(x+11*dpr,y-7*dpr,textWidth+5*dpr,14*dpr);
+    ctx.fillStyle=color;
+    ctx.fillText(text,x+13*dpr,y);
+  }
+}
 function logEvent(text,kind='hit'){
   const item=document.createElement('li');item.className=kind;item.textContent=text;$('events').prepend(item);
   while($('events').children.length>8)$('events').lastElementChild.remove();
@@ -193,12 +293,79 @@ async function loadTarget(){
   const gltf=await new GLTFLoader().loadAsync('/reference/LeePerrySmith.glb');
   gltf.scene.traverse(object=>{if(!object.isMesh)return;normalizeHead(object.geometry);object.material=new THREE.MeshBasicMaterial({color:0x80e66f,transparent:true,opacity:.28,depthWrite:false,side:THREE.DoubleSide});targetMeshes.push(object);const wire=new THREE.LineSegments(new THREE.WireframeGeometry(object.geometry),new THREE.LineBasicMaterial({color:0xc3ffb8,transparent:true,opacity:.2,depthWrite:false}));object.add(wire);});
   target.add(gltf.scene);target.updateMatrixWorld(true);
-  new THREE.Box3().setFromObject(target).getSize(targetSize);fitTarget();
-  // Real punch offsets are mapped onto the mesh through its actual width, so the "punch area"
-  // slider means what it says whatever head is loaded. targetSize is the mesh's LOCAL size —
-  // measured before fitTarget scaled the group — and contact points are head-local, so the local
-  // width is the right divisor. The old /scale here compressed every marker toward the nose by
-  // the display-fit factor (~2.5x), which is much of why hit locations read as unreliable.
+  // Measure the HEAD, not the bust. `normalizeHead` pins the head's height to .28 and centres it
+  // on the local origin, but the asset keeps its neck and shoulders, so the object's bounding box
+  // runs ~37 cm below that origin and ~2.4x wider than the head. Everything downstream describes
+  // the head — the lateral gain that maps a punch's real offset onto the mesh, the ellipsoid the
+  // entry is solved against, the region labels — and feeding it the bust's box inflated the gain
+  // by 2.36x, so a punch 5 cm off-centre landed ~12 cm off-centre. Scanning the vertices inside
+  // the head band measures the thing the numbers are supposed to mean.
+  // The head runs from the crown down to the JAW. Below that the silhouette necks in (to ~65% of
+  // the head's width) and then flares into shoulders more than twice as wide as the head, so a
+  // fixed band around the origin cannot find it: it slices through the neck, which both stretches
+  // the ellipsoid and leaves the origin at mouth height. Profile the silhouette instead — widest
+  // slice is the cheek/ear line, and walking down from it to where the width falls away is the
+  // jaw — then recentre the model on the head's own middle, which is the point a punch aimed at
+  // the middle of the camera is reported at.
+  const points=[],vertex=new THREE.Vector3();
+  const intoTarget=new THREE.Matrix4().copy(target.matrixWorld).invert();
+  for(const mesh of targetMeshes){
+    const positions=mesh.geometry.attributes.position;
+    if(!positions)continue;
+    mesh.updateWorldMatrix(true,false);
+    const toLocal=new THREE.Matrix4().multiplyMatrices(intoTarget,mesh.matrixWorld);
+    for(let i=0;i<positions.count;i++)points.push(vertex.fromBufferAttribute(positions,i).applyMatrix4(toLocal).toArray());
+  }
+  const measureHead=()=>{
+    if(!points.length)return null;
+    let top=-Infinity,floor=Infinity;
+    for(const p of points){if(p[1]>top)top=p[1];if(p[1]<floor)floor=p[1];}
+    const slices=64,span=(top-floor)/slices;
+    if(!(span>0))return null;
+    const width=new Float64Array(slices),lo=new Float64Array(slices).fill(Infinity),hi=new Float64Array(slices).fill(-Infinity);
+    for(const p of points){
+      const i=Math.min(slices-1,Math.max(0,Math.floor((top-p[1])/span)));
+      if(p[0]<lo[i])lo[i]=p[0];
+      if(p[0]>hi[i])hi[i]=p[0];
+    }
+    for(let i=0;i<slices;i++)width[i]=hi[i]>lo[i]?hi[i]-lo[i]:0;
+    // Walk DOWN from the crown against a running maximum. The widest slice of the whole bust is
+    // the shoulders — more than twice the head's width — so measuring against the global maximum
+    // never finds the neck at all. From the crown the silhouette widens to the cheek line and
+    // then collapses at the jaw, and that collapse is the head's bottom.
+    let jaw=slices,peak=0;
+    for(let i=0;i<slices;i++){
+      if(!(width[i]>0))continue;              // empty slice: no surface at this height
+      if(width[i]>peak)peak=width[i];
+      else if(width[i]<peak*.7){jaw=i;break;}
+    }
+    const bottom=top-jaw*span;
+    const box=new THREE.Box3().makeEmpty(),point=new THREE.Vector3();
+    for(const p of points)if(p[1]>=bottom)box.expandByPoint(point.fromArray(p));
+    return box;
+  };
+  const headBox=measureHead()??new THREE.Box3().setFromObject(target);
+  headBox.getSize(targetSize);
+  // The model stays where `normalizeHead` put it. Forcing the face's middle onto the camera's
+  // middle is not the right model — a webcam sits below the face and a puncher does not aim at
+  // its optical centre — so the alignment is a single tunable offset applied to impacts instead
+  // (IMPACT DROP), not a translation of the head. What the head's measured extents ARE used for
+  // is framing: keeping the whole head on screen while filling it.
+  headExtent.top=headBox.max.y;headExtent.bottom=headBox.min.y;
+  headExtent.halfWidth=Math.max(Math.abs(headBox.max.x),Math.abs(headBox.min.x));
+  // Framing keeps measuring the whole object, as it always did; only the pipeline's numbers
+  // (gain, ellipsoid, regions) come from the head.
+  new THREE.Box3().setFromObject(target).getSize(bustSize);
+  // The head's own centre is the local origin, and the group sits on the camera axis — so the
+  // face's middle renders at the middle of the view, which is where a punch aimed at the middle
+  // of the real camera is reported. Fitting to the HEAD's height (rather than the whole bust's)
+  // is what fills the frame with the face and drops the shoulders below it.
+  fitTarget();
+  // Real punch offsets are mapped onto the mesh through the HEAD's actual width, so the "punch
+  // area" slider means what it says whatever head is loaded: punch 5 cm right of centre and the
+  // marker lands 5 cm right of the face's centre. targetSize is a LOCAL measurement — taken
+  // before fitTarget scaled the group — and contact points are head-local, so the local width is
+  // the right divisor.
   targetTracking.setHeadWidth(targetSize.x);
   // Entry is solved against an ellipsoid standing in for the head, sized from the mesh itself.
   targetTracking.setHeadRadii([targetSize.x/2,targetSize.y/2,targetSize.z/2]);
@@ -258,8 +425,13 @@ function snapToMesh(entry){
 function registerTargetImpact(contact){
   if(!targetMeshes.length)return;
   target.updateWorldMatrix(true,true);
+  // The camera sits below the face, and a puncher aims at the face rather than at the lens, so
+  // the pipeline's origin (the camera's optical axis) and the point the punch was aimed at are
+  // offset by a constant. Applied here, to the reported impact, rather than by moving the head —
+  // and read fresh on every impact, so tuning the slider shows up on the very next punch.
+  const drop=impactDrop;
   if(contact.missed){
-    logEvent(`miss: ${contact.hand??''} ${contact.mode??'punch'} passed ${(Math.hypot(contact.aim[0],contact.aim[1])*100).toFixed(0)} cm wide of the head`,'miss');
+    logEvent(`miss: ${contact.hand??''} ${contact.mode??'punch'} passed ${(Math.hypot(contact.aim[0],contact.aim[1]-drop)*100).toFixed(0)} cm wide of the head`,'miss');
     clearImpactVector();
     return;
   }
@@ -270,7 +442,7 @@ function registerTargetImpact(contact){
   const travel=new THREE.Vector3(...contact.direction);
   if(travel.lengthSq()<1e-8)travel.set(0,0,-1);
   travel.normalize();
-  const entry=new THREE.Vector3(...contact.point);
+  const entry=new THREE.Vector3(contact.point[0],contact.point[1]-drop,contact.point[2]);
   const origin=target.localToWorld(entry.clone().addScaledVector(travel,-1.2));
   const direction=travel.clone().transformDirection(target.matrixWorld).normalize();
   raycaster.set(origin,direction);
@@ -295,7 +467,7 @@ function registerTargetImpact(contact){
   registerImpact({
     type:'impact',hand:contact.hand,point:local.toArray(),direction:velocity.clone().normalize().toArray(),
     speed,intensity:impactIntensity(speed),confidence:contact.confidence,
-    region:collider.regionAt(local,regionTarget??undefined),mode:contact.mode,
+    region:collider.regionAt(local,regionTarget??undefined),mode:contact.mode,why:contact.why,
     timestamp:contact.timestamp,normalSpeed,tangentSpeed,
     obliquity:knuckleNormal?Math.acos(Math.min(1,Math.max(-1,new THREE.Vector3(...knuckleNormal).dot(normal.clone().negate()))))*180/Math.PI:undefined,
     source:'target',blurAssisted:contact.stale,bridged:contact.bridged,
@@ -303,7 +475,8 @@ function registerTargetImpact(contact){
 }
 function registerImpact(event){
   leaveImpactVector(event);const p=event.point,d=event.direction;
-  const named=typeof event.hand==='string'?`${event.hand} ${event.mode}`:event.mode;
+  const named=(typeof event.hand==='string'?`${event.hand} ${event.mode}`:event.mode)
+    +(event.why?` (${event.why})`:'');
   const quality=Number.isFinite(event.normalSpeed)
     ?` · ${named} · ${event.normalSpeed.toFixed(1)} m/s in, ${event.tangentSpeed.toFixed(1)} m/s rake${Number.isFinite(event.obliquity)?`, ${event.obliquity.toFixed(0)}° off-square`:''}`
     :` · ${named}`;
@@ -331,10 +504,12 @@ function readout(){
       :'  fitted      — (detection runs on this line; if it is blank nothing can fire)');
     lines.push(`  punch       ${d.phase}  peak ${d.peak.toFixed(2)}m/s  closed ${(d.travel*100).toFixed(0)}cm of range`
       +(d.minDepth!==null?`  apex ${(d.minDepth*100).toFixed(0)}cm`:''));
-    lines.push(`  gates       start ${targetTracking.startClosing.toFixed(1)} · peak ${targetTracking.minPeak.toFixed(1)} · reach ${(targetTracking.minTravel*100).toFixed(0)}cm`);
+    lines.push(`  gates       start ${targetTracking.startClosing.toFixed(1)} · peak ${targetTracking.minPeak.toFixed(1)} · reach ${(targetTracking.minTravel*100).toFixed(0)}cm · strike ${(targetTracking.strikeRange*100).toFixed(0)}cm`);
+    lines.push(`  aim         drop ${(impactDrop*100).toFixed(0)}cm · gain ${targetTracking.gain.toFixed(2)} · zoom ${(modelZoom*100).toFixed(0)}% · scale ${target.scale.x.toFixed(2)}`);
     lines.push(`  hits ${stats.impacts}${stats.stale?` (${stats.stale} censored)`:''}`
       +`  slots ${targetTracking.slots.size}`
       +(stats.merged?`  merged ${stats.merged}`:'')+(stats.refractory?`  suppressed ${stats.refractory}`:'')
+      +(stats.ignored?`  low ${stats.ignored}`:'')
       +(stats.rejected?`\n    reject: ${stats.rejected}`:''));
   }else lines.push('TGT  camera off');
   if(tracking.active)for(const hand of hands){
@@ -352,12 +527,18 @@ function frame(time){
   // phone->laptop transform, which changes every frame because the phone is on a moving person.
   if(targetTracking.active){
     const contact=targetTracking.tick(now);
-    if(contact)registerTargetImpact(contact);
+    if(contact){
+      lastImpactAt=now;
+      lastImpactText=`${contact.hand??''} ${contact.mode??'punch'}`.trim().toUpperCase()
+        +(contact.why?`  ·  ${contact.why}`:'');
+      registerTargetImpact(contact);
+    }
     const d=targetTracking.debug,p=targetTracking.probe;
     setTargetStatus(!p.results?'NO FRAMES':!p.rawHands?'NO HAND'
       :d.depth===null?`${p.rawHands} HAND · FIT FAILING`
       :`${(d.depth*100).toFixed(0)}cm ${d.closing>0?'▼':' '}${Math.abs(d.closing).toFixed(1)}m/s · ${targetTracking.stats.impacts} HITS`);
   }
+  drawTargetOverlay(now);
   if(tracking.active){
     tracking.tick(now,hands,stage.clientWidth/stage.clientHeight);
     const calibrating=tracking.cal.active;
@@ -458,10 +639,17 @@ $('target-mirror').onclick=()=>applyMirror(!targetTracking.mirrored,true);
 try{if(localStorage.getItem('cv-debug.target-mirrored')==='1')applyMirror(true,false);}catch{}
 $('target-source').onchange=async()=>{if(!targetRunning||targetRestarting)return;targetRestarting=true;stopTargetCamera();await startTargetCamera();targetRestarting=false;};
 $('contact').oninput=()=>{const value=Number($('contact').value);$('contact-value').textContent=value+' cm';targetTracking.setContactDepth(value/100);};
+$('strike').oninput=()=>{const value=Number($('strike').value);$('strike-value').textContent=value+' cm';targetTracking.strikeRange=value/100;};
 $('minspeed').oninput=()=>{const value=Number($('minspeed').value)/10;$('speed-value').textContent=value.toFixed(1)+' m/s';targetTracking.minPeak=value;targetTracking.startClosing=Math.min(value*.7,value);};
 $('reach').oninput=()=>{const value=Number($('reach').value);$('reach-value').textContent=value+' cm';targetTracking.minTravel=value/100;};
 $('area').oninput=()=>{const value=Number($('area').value);$('area-value').textContent=value+' cm';targetTracking.setTargetWidth(value/100);};
 $('fov').oninput=()=>{const value=Number($('fov').value);$('fov-value').textContent=value+'°';targetTracking.setFov(value);};
+// A webcam sits below the face and a puncher aims at the face, not at the lens's optical centre,
+// so the two centres are simply offset. Rather than move the head (which forces a false claim
+// that the face's middle IS the camera's middle), every reported impact is shifted down by this
+// constant. Read at impact time, so a change takes effect on the very next punch.
+$('drop').oninput=()=>{const value=Number($('drop').value);$('drop-value').textContent=value+' cm';impactDrop=value/100;};
+$('zoom').oninput=()=>{const value=Number($('zoom').value);$('zoom-value').textContent=value+'%';modelZoom=value/100;fitTarget();};
 $('calibrate').onclick=()=>{tracking.recalibrate();strikes.reset();strikeTracked.clear();clearImpactVector();};
 $('skip-calibration').onclick=()=>{if(!tracking.cal.active)return;tracking.skipCalibration();logEvent('calibration skipped — guard synthesized from live hands (debug).');};
 $('estimator').onclick=()=>{

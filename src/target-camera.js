@@ -56,6 +56,8 @@ export class TargetTracking{
   set startClosing(value){if(Number.isFinite(value))this.extractor.configure({startClosing:value});}
   get minTravel(){return this.extractor.options.minTravel;}
   set minTravel(value){if(Number.isFinite(value))this.extractor.configure({minTravel:value});}
+  get strikeRange(){return this.extractor.options.strikeRange;}
+  set strikeRange(value){if(Number.isFinite(value)&&value>.1)this.extractor.configure({strikeRange:value});}
   get contactDepth(){return this.extractor.options.contactDepth;}
   setContactDepth(value){if(Number.isFinite(value)&&value>.02)this.extractor.configure({contactDepth:value});}
   setTargetWidth(value){if(Number.isFinite(value)&&value>.05)this.targetWidth=value;}
@@ -177,14 +179,45 @@ export class TargetTracking{
     // undo a mirrored feed in one place.
     const sign=this.mirrored?-1:1,mu=u=>this.mirrored?1-u:u;
     // The motion stream goes to the core first, so this very tick can already bridge with it.
+    // The blob's block-matched flow (du/dv, image units per second) rides along: the core uses it
+    // to steer a slot's predicted position through landmark-dead blur, which is what lets the
+    // reacquired landmarks rejoin their own identity instead of forking a duplicate.
     for(const blob of results.motion?.blobs??[]){
       this.extractor.pushBlob({t:results.timestamp,u:mu(blob.u),v:blob.v,mass:blob.mass,
-        spread:blob.spread,expand:blob.expand,kx:this.camera.kx,ky:this.camera.ky});
+        spread:blob.spread,expand:blob.expand,
+        du:Number.isFinite(blob.du)?sign*blob.du:undefined,dv:blob.dv,
+        kx:this.camera.kx,ky:this.camera.ky});
     }
 
+    // The hand's long axis (wrist -> knuckle centroid) measured IN THE IMAGE, in units of the
+    // fist's own apparent width. This is the jab/uppercut discriminator, and it is deliberately
+    // computed here from raw landmarks rather than taken from the 3D pose: a straight punch's
+    // hand axis points along the view axis, so in 3D it lives almost entirely in the DEPTH
+    // component — the one MediaPipe measures worst. Depth compression then shrinks that
+    // component and normalisation inflates the small honest vertical, so a jab's fitted axis
+    // tilts "up" and reads as an uppercut. In the image there is no such failure: a fist aimed
+    // at the camera has its axis foreshortened to nearly nothing (short vector), while an
+    // uppercut's points clearly up the frame (long vector). Both are pure image-plane geometry.
+    // Scaled into head-frame image units (+du = head +x, +dv = up) and made aspect-correct so
+    // the ratio means the same thing horizontally and vertically.
+    const axisOf=landmarks=>{
+      if(landmarks?.length!==21)return null;
+      const mcp=[5,9,13,17];
+      const mx=mcp.reduce((s,i)=>s+landmarks[i].x,0)/4,my=mcp.reduce((s,i)=>s+landmarks[i].y,0)/4;
+      const dx=(mx-landmarks[0].x)*sourceAspect,dy=my-landmarks[0].y;
+      const span=Math.hypot((landmarks[5].x-landmarks[17].x)*sourceAspect,landmarks[5].y-landmarks[17].y);
+      const len=Math.hypot(dx,dy),scale=Math.max(span,len);
+      if(!(scale>1e-4))return null;
+      // Normalised by the hand's LARGER apparent dimension, not by the knuckle span alone: an
+      // edge-on fist (guard — back of the fist to the side) collapses the span, and dividing by
+      // it inflated a resting guard fist into an emphatic "axis up". `facing` says which face
+      // shows: knuckle-row span relative to hand scale — ~1.0 whenever the back (or front) of
+      // the fist is to the camera, ~.1 for a guard fist seen edge-on.
+      return {du:-sign*dx/scale,dv:-dy/scale,facing:span/scale};
+    };
     const detections=raw.map((landmarks,index)=>({
       landmarks,index,world:results.worldLandmarks?.[index],
-      span:handApparentSpan(landmarks),
+      span:handApparentSpan(landmarks),axis:axisOf(landmarks),
       knuckles:landmarks?.length===21?Math.hypot(landmarks[5].x-landmarks[17].x,landmarks[5].y-landmarks[17].y):0,
       raw:results.handedness?.[index]?.[0]?.categoryName??'hand',
       confidence:results.handedness?.[index]?.[0]?.score??1,
@@ -233,22 +266,33 @@ export class TargetTracking{
           p:[sign*solved.centre[0],solved.centre[1],-solved.centre[2]],
           closure:solved.closure,
           kn:solved.knuckleNormal?[sign*solved.knuckleNormal[0],solved.knuckleNormal[1],-solved.knuckleNormal[2]]:null,
-          label,score:d.confidence,quality:'rigid',
+          label,score:d.confidence,quality:'rigid',axis:d.axis,
           // Metric lateral wrist offset from the solved pose — the forearm trails toward its own
           // shoulder, and metric space is free of the perspective pull toward image centre that
           // makes the raw landmark offset read as the wrong hand for laterally-offset fists.
           wristDx:sign*(solved.points[0][0]-solved.centre[0]),chirality:sign*solved.chirality});
       }else{
         this.probe.fitFail++;this.probe.lastFit='solveTranslation returned null (hand too close, or degenerate)';
-        // A degraded apparent-size sample keeps the trajectory alive through the blur the rigid
-        // fit could not solve; the core weights it accordingly.
-        if(d.knuckles>1e-4){
-          const span=estimator.shape?.span||KNUCKLE_SPAN_PRIOR;
-          const depth=clamp(span/(2*d.knuckles*this.camera.kx),.05,3);
+        // A degraded sample keeps the trajectory alive through what the rigid fit could not
+        // solve — but ONLY while a recent rigid fit can lend it depth. Its DEPTH is inertial,
+        // carried from that anchor, never derived from the apparent span: apparent size
+        // conflates rotation with distance by construction (a stationary fist rotating as the
+        // elbow lifts halves its knuckle span, which span-depth read as a tens-of-centimetres
+        // phantom approach; blur widening it the other way fabricated superhuman speeds).
+        //
+        // With no anchor there is no honest depth to be had, so nothing enters the trajectory:
+        // the hand is merely OBSERVED, which keeps its identity alive (association, liveness,
+        // rest lineage) without inventing a position. A punch lasts ~200 ms, so "no rigid fit
+        // for 400 ms" never happens mid-punch — it happens to a fist parked at the lens, where
+        // apparent-size depth manufactured an endless stream of phantom jabs.
+        const anchor=slot.samples.findLast?.(s=>s.quality==='rigid'&&results.timestamp-s.t<400)
+          ??[...slot.samples].reverse().find(s=>s.quality==='rigid'&&results.timestamp-s.t<400);
+        if(anchor){
+          const depth=anchor.p[2];
           this.extractor.push(slot,{t:results.timestamp,u:d.centre.x,v:d.centre.y,
             p:[(d.centre.x*2-1)*depth*this.camera.kx,(1-d.centre.y*2)*depth*this.camera.ky,depth],
-            closure:closureOf(d.world),kn:null,label,score:d.confidence,quality:'span'});
-        }
+            closure:closureOf(d.world),kn:null,label,score:d.confidence,quality:'span',axis:d.axis});
+        }else this.extractor.observe(slot,{t:results.timestamp,u:d.centre.x,v:d.centre.y});
       }
     }
     return this.extractor.tick(now,this.#solveOptions());

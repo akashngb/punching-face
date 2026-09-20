@@ -12,8 +12,11 @@
 //     with the retreat acting as the *confirmation* of the punch rather than a motion that has to
 //     be filtered out;
 //   - emitted events consume their evidence, so the same samples cannot support a second event;
-//   - candidate arbitration merges near-simultaneous candidates whose image support overlaps
-//     (one fist seen under two identities) while letting genuinely distinct punches through.
+//   - candidate arbitration merges other views of the same strike two ways: overlapping image
+//     support (one fist under two identities at the same spot), and temporal exclusivity — blur
+//     can displace the image position arbitrarily far between two sightings of one fist, but it
+//     cannot make one fist appear twice at once, so identities that never coexisted on screen are
+//     one fist unless each independently observed a complete punch.
 //
 // Everything here is pure data-in/data-out: no DOM, no THREE, no camera plumbing. Units: metres,
 // m/s, milliseconds. Camera frame: x right (+u), y up, z = distance in front of the lens
@@ -159,6 +162,27 @@ function quadFit(times,values,weights,t0){
 
 const tricube=x=>{const t=1-Math.abs(x)**3;return t>0?t*t*t:0;};
 
+// Weighted LINEAR slope of a scalar series at t0 — for measuring speeds on sparse samples. The
+// quadratic localFit is right for trajectories (it follows curvature) but wrong for sparse noisy
+// speed reads: three points 100 ms apart fit a quadratic EXACTLY, so 1 cm of depth noise on the
+// middle point becomes metres-per-second of phantom slope. A line through the same window is
+// stable by construction and reads the windowed mean speed — an honest, slightly conservative
+// figure that a gate can be calibrated against.
+export function linearSlope(samples,pick,t0,halfMs){
+  let sw=0,st=0,sy=0,stt=0,sty=0,n=0;
+  for(const s of samples){
+    const dt=s.t-t0;
+    if(Math.abs(dt)>halfMs)continue;
+    const w=s.w*tricube(dt/halfMs),x=dt/1000,y=pick(s);
+    if(!(w>0))continue;
+    sw+=w;st+=w*x;sy+=w*y;stt+=w*x*x;sty+=w*x*y;n++;
+  }
+  if(n<2)return null;
+  const det=sw*stt-st*st;
+  if(!Number.isFinite(det)||Math.abs(det)<1e-12)return null;
+  return (sw*sty-st*sy)/det;
+}
+
 // Fitted value + derivative of a scalar series at t0, over a +/-halfMs tricube window.
 export function localFit(samples,pick,t0,halfMs){
   const times=[],values=[],weights=[];
@@ -189,45 +213,142 @@ function stateAt(samples,t,halfMs){
 // crosses a third of the frame laterally even when every depth estimate is garbage and the
 // terminal tangent degraded to a chord, so it is what keeps a censored hook a hook. All head
 // frame; sweep in head-frame image units (+du = head +x, +dv = up).
-export function classifyMode({direction,knuckleNormal=null,entry=null,curvature=0,sweep=null}){
+export function classifyMode({direction,knuckleNormal=null,entry=null,curvature=0,sweep=null,handAxis=null,range=null},detail=null){
+  const verdict=(mode,why)=>{if(detail)detail.why=why;return mode;};
+  // WHERE THE FIST POINTS, measured in the image, in fist-widths. This is the jab/uppercut
+  // discriminator and it is checked first, because the two punches differ most obviously in
+  // exactly this: a jab arrives with its knuckles square at the camera, so the wrist->knuckle
+  // axis points along the view axis and FORESHORTENS to almost nothing; an uppercut arrives with
+  // its knuckles up, so the same axis stands tall up the frame. Both readings are pure image
+  // geometry — immune to the depth compression that made the 3D knuckle normal tilt a jab's
+  // axis "up" and read it as an uppercut (and, the other way, buried real uppercuts whose
+  // travel was truncated). Measured on real hand geometry: a fist aimed at the camera reads
+  // 0.0-0.25 fist-widths, a true uppercut 0.4-0.9 (the absolute figure shrinks with perspective
+  // as the fist nears the lens, which is why the bands are set from the two CLEAR cases). The
+  // middle is left UNDECIDED on purpose — an ambiguous orientation defers to travel evidence
+  // rather than inventing a type from it.
+  //
+  // WHICH FACE of the hand shows is the other half of the shape (`facing`: knuckle-row span
+  // relative to hand scale). A guard fist is ALSO vertical — same axis as an uppercut — but it
+  // is seen EDGE-ON: back of the fist to the side, so the knuckle row points away from the
+  // camera and its apparent span collapses (measured: guard .11, even 20° off edge .40, every
+  // face-on punch 1.0). An uppercut and a hook both show the BACK of the fist; guard shows its
+  // edge. So no orientation verdict from an edge-on hand — idling fists in guard were firing
+  // "uppercut" purely on their vertical axis. And a face-on fist with its knuckles to the SIDE
+  // is a hook's hand shape: corroborating image evidence when blur ate the sweep.
+  const facing=handAxis?.facing??1;
+  const faceOn=facing>=.55,edgeOn=!!handAxis&&facing<.55;
+  const axisLen=handAxis?Math.hypot(handAxis.du,handAxis.dv):0;
+  const axisAimed=handAxis&&axisLen<.32;                       // knuckles at the camera
+  const axisUp=handAxis&&faceOn&&handAxis.dv>.40&&handAxis.dv>Math.abs(handAxis.du)*1.3;
+  const axisDown=handAxis&&faceOn&&handAxis.dv<-.40&&-handAxis.dv>Math.abs(handAxis.du)*1.3;
+  const axisSide=handAxis&&faceOn&&Math.abs(handAxis.du)>.55&&Math.abs(handAxis.du)>Math.abs(handAxis.dv)*1.3;
   const d=direction,n=finite3(knuckleNormal)?knuckleNormal:null;
   const fromBelow=entry&&Number.isFinite(entry[1])&&entry[1]<-.16;
   const su=Math.abs(sweep?.du??0),sv=Math.abs(sweep?.dv??0);
   const sweepHook=su>.16&&su>sv*1.3;
   const sweepUp=(sweep?.dv??0)>.12&&sv>su;
   const lat=Math.abs(d[0]);
+  // The image plane is what the target camera measures BEST, so where the measured sweep and the
+  // fitted 3D direction disagree, the sweep wins. A hook translates across the image; an
+  // uppercut climbs it; a jab barely moves — it looms. The fitted lateral, by contrast, is
+  // depth-starved exactly at contact: when the rigid fit dies and depth goes inertial, the
+  // velocity's z collapses and the terminal direction degrades to pure lateral/vertical noise —
+  // which read straight jabs as hooks and uppercuts. Hence: no hook verdict without image
+  // support, and upward image motion outranks every orientation prior. The bar sits at .06:
+  // depth-starved lateral noise moves the image a few hundredths at most, while a truncated hook
+  // still sweeps ≥ ~.09 even when the apex rewind has collapsed its window (a flat-range hook
+  // "arrives at depth" almost immediately while its lateral sweep is still going). An off-centre
+  // jab's perspective drift can exceed the bar, but its fitted lateral stays small, so no hook
+  // branch takes it anyway.
+  const hookEvidence=!sweep||su>=.06||axisSide;
+  // Knuckles square at the camera is a straight punch, never an uppercut — an uppercut's
+  // knuckles point UP at contact. The veto only needs the fist to be measured near face-on with
+  // no vertical tilt; every genuine uppercut carrier requires or shows n.y well above this.
+  // Knuckles pointing more FORWARD than up is a straight punch, never an uppercut. The old veto
+  // band (n.y < .35) left a gap: ordinary jab form angles the fist up 30-50°, so n.y lands at
+  // .45-.75 — unvetoed, and close enough to the orientation carrier to tip a jab into 'uppercut'
+  // on noise. An uppercut at contact has its knuckles genuinely UP: n.y must at least exceed
+  // |n.z|, which no face-on fist does however tilted.
+  const knAtCamera=axisAimed||(!handAxis&&!!n&&n[1]<Math.abs(n[2]));
+  // Measured orientation decides the vertical question outright, before any travel evidence is
+  // consulted: an uppercut cannot arrive with its knuckles aimed at the camera, and a straight
+  // punch cannot arrive with them standing up the frame. Overwhelming lateral travel still wins
+  // first — a rising hook is a hook — and the axis must not itself be lying sideways.
+  // ...but orientation may not overrule clean travel. Near the lens the fist fills the frame and
+  // perspective is extreme: the wrist is much farther from the camera than the knuckles, so it
+  // projects low in the image and the measured axis "stands up" even for a dead-straight jab
+  // (observed live at 10 cm range, logged as LEFT UPPERCUT while the knuckles faced the camera).
+  // So when the punch is measurably driving straight in, orientation needs corroboration from
+  // some independent sign of a rise — entry from below, or an upward image sweep — before it can
+  // call an uppercut. A real uppercut supplies one of those even when blur truncates its travel.
+  // ONE invariant governs every uppercut verdict below: the punch must show IMAGE-PLANE evidence
+  // that it rose — an upward sweep across the frame, or an entry from below the head. Nothing
+  // depth-derived may stand in for it. Three separate live misclassifications all had the same
+  // shape: a straight jab at close range, where the fitted direction, the 3D knuckle normal and
+  // (through perspective) even the image hand axis all tilt "up", while the punch demonstrably
+  // never rose in the frame. The fist at 14 cm fills the view and its wrist projects far below
+  // its knuckles; a fragmented punch's censored direction degrades the same way. Image rise is
+  // the one signal that stays honest through all of it — and a genuine uppercut always has it,
+  // because rising up the frame is what an uppercut IS. The hand axis strengthens the verdict
+  // but can never substitute for it.
+  //
+  // Orientation may still carry a truncated uppercut — but only from far enough away to be
+  // believed. Inside ~25 cm the fist subtends a huge angle, its wrist sits far behind its
+  // knuckles, and every orientation reading tilts upward whatever the punch is doing; that is
+  // precisely where the live misfires happened (10-14 cm). Beyond it, orientation is sound and a
+  // top-only uppercut whose rise happened below the frame can still be recognised.
+  const rose=!sweep||sweepUp||fromBelow;
+  const closeRange=Number.isFinite(range)&&range<.25;
+  const orientationUp=handAxis?axisUp:(!!n&&n[1]>.75);
+  const upOk=rose||(!closeRange&&orientationUp);
+  if(axisUp&&upOk&&!(lat>.60&&sweepHook))return verdict('uppercut','fist-points-up');
+  if(axisDown&&Math.abs(d[0])<.60&&(sweep?.dv??0)<-.08)return verdict('overhand','fist-points-down');
+  if(!knAtCamera&&!edgeOn&&sweepUp&&sv>.15&&(sv>su*1.5||lat<.50)&&d[1]>-.25)return verdict('uppercut','image-rise');
   // Overwhelming lateral travel is a hook before any other prior gets a look — a rising hook must
   // not fall into an uppercut branch on its upward tilt.
-  if(lat>.60&&d[1]<.60)return 'hook';
+  if(lat>.60&&d[1]<.60&&hookEvidence)return verdict('hook','lateral-travel');
+  // The hook's hand shape: back of the fist to the camera, knuckles to the SIDE. With lateral
+  // travel behind it, the shape alone carries the verdict — the case where the apex rewind
+  // collapsed the sweep and hooks were falling through to 'jab'.
+  if(axisSide&&lat>.30&&!sweepUp)return verdict('hook','fist-points-side');
   if(n){
-    if(n[1]>.45&&d[1]>.25&&lat<.55&&!sweepHook)return 'uppercut';
-    // Orientation carries a truncated uppercut on its own. The rise is low, fast, blurred and
+    // Moderate knuckles-up plus rising travel is an uppercut only when the IMAGE saw some rise
+    // too: ordinary jab form angles the fist upward and depth noise tilts the fitted direction,
+    // and the pair of them read straight jabs as uppercuts.
+    if(!knAtCamera&&!edgeOn&&upOk&&n[1]>.45&&d[1]>.25&&lat<.55&&!sweepHook)return verdict('uppercut','knuckles+rise');
+    // Orientation may carry a truncated uppercut on its own: the rise is low, fast, blurred and
     // often below the frame, so the landmarker locks on only at the top where the upward velocity
     // is already spent — the measured direction reads near-pure -z and every travel-gated branch
-    // fails. But the fist's ORIENTATION is measured at the apex, exactly where tracking is good,
-    // and knuckles pointing up is an uppercut's signature (a jab's wrist->knuckle axis points at
-    // the target however the palm is rotated). Travel only has to not contradict.
-    if(n[1]>.55&&d[1]>-.15&&lat<.55&&!sweepHook)return 'uppercut';
-    if(n[1]<-.50&&d[1]<-.20)return 'overhand';
-    if(Math.abs(n[0])>.50&&lat>.30)return 'hook';
+    // fails, while the fist's ORIENTATION is measured at the apex, exactly where tracking is
+    // good. But only EMPHATIC knuckles-up qualifies: ordinary jab form angles the fist upward
+    // too (n.y ~.5-.7 for a fist punched at 45°), and at the old .55 threshold real jabs read as
+    // uppercuts. At .75 only a genuinely vertical fist carries the class alone, and the image
+    // must at least not contradict.
+    if(upOk&&!edgeOn&&n[1]>.75&&d[1]>-.15&&lat<.55&&!sweepHook)return verdict('uppercut','knuckles-vertical');
+    if(n[1]<-.50&&d[1]<-.20)return verdict('overhand','knuckles-down');
+    if(Math.abs(n[0])>.50&&lat>.30&&hookEvidence)return verdict('hook','knuckles-side');
   }
-  if(d[1]>.45&&d[1]>lat*.9&&!sweepHook)return 'uppercut';
-  // The image sweep saw the rise even when the fitted direction did not (blob and degraded
-  // samples count toward it): a strongly upward sweep with nothing lateral is an uppercut.
-  if(sweepUp&&sv>.15&&lat<.50&&d[1]>-.10)return 'uppercut';
+  if(!knAtCamera&&!edgeOn&&upOk&&d[1]>.45&&d[1]>lat*.9&&!sweepHook)return verdict('uppercut','rising-travel');
   // The entered-from-below prior needs corroboration beyond a low guard: rising travel that is
   // not strongly lateral, and an image sweep that is actually vertical.
-  if(fromBelow&&d[1]>.30&&lat<.50&&(sweepUp||sv>=su))return 'uppercut';
-  if(lat>.45)return 'hook';
-  if(lat>.30&&(curvature>.2||sweepHook))return 'hook';
-  if(sweepHook&&lat>.22)return 'hook';
-  return 'jab';
+  if(!knAtCamera&&!edgeOn&&fromBelow&&d[1]>.30&&lat<.50&&(sweepUp||sv>=su))return verdict('uppercut','from-below');
+  if(lat>.45&&hookEvidence)return verdict('hook','lateral');
+  if(lat>.30&&(curvature>.2||sweepHook)&&hookEvidence)return verdict('hook','arc');
+  if(sweepHook&&lat>.22)return verdict('hook','image-sweep');
+  return verdict('jab','default-straight');
 }
 
 /**
  * Which of the puncher's hands threw this. Physically grounded geometry outvotes MediaPipe's
  * per-frame guess:
  *
+ *   - rest lineage (strongest): where this identity RESTED before it flew. Fists guard on their
+ *     own side — the puncher's right at low u — and, unlike every within-window measurement,
+ *     the guard was observed while tracking was good, however badly the punch itself blurred.
+ *   - elimination: a fist visibly resting somewhere else right now is not the fist that just
+ *     landed. Cast only when the striker has no rest history of its own (mid-flight birth), so a
+ *     duplicate identity of the striker parked at its guard cannot vote against it.
  *   - wrist trail: the forearm always exits toward its own shoulder, and the puncher's right
  *     shoulder sits at camera -x — so a windowed mean of the METRIC lateral wrist-minus-knuckles
  *     offset says which arm this is on every sample, whatever the punch type and however late the
@@ -242,11 +363,17 @@ export function classifyMode({direction,knuckleNormal=null,entry=null,curvature=
  *     exactly how right hooks got logged as left. The caller passes null for centre entries.
  *   - travel azimuth: a right hook drives toward the puncher's left (head-frame -x); weighted up
  *     when the punch is strongly lateral.
- *   - the MediaPipe label, flip-corrected for the unmirrored feed, as the weakest vote.
+ *   - the landmarker's label as the weakest vote. This vendored bundle names the PHYSICAL hand
+ *     on an unmirrored feed (no selfie assumption — verified live); a mirrored feed's labels
+ *     are flipped at the shell boundary before they reach here.
  */
-export function resolveHand({entryU=null,labels=[],direction=null,wristDx=null,chirality=null}){
+export function resolveHand({entryU=null,labels=[],direction=null,wristDx=null,chirality=null,restU=null,otherRestU=null}){
   let right=0,left=0;
   const cast=(isRight,weight)=>{if(isRight)right+=weight;else left+=weight;};
+  if(Number.isFinite(restU)&&Math.abs(restU-.5)>.06)
+    cast(restU<.5,1.4*Math.min(1,Math.abs(restU-.5)/.18));
+  if(Number.isFinite(otherRestU)&&Math.abs(otherRestU-.5)>.06)
+    cast(otherRestU>=.5,1.2*Math.min(1,Math.abs(otherRestU-.5)/.18));
   if(Number.isFinite(wristDx)&&Math.abs(wristDx)>.015)
     cast(wristDx<0,1.0*Math.min(1,Math.abs(wristDx)/.06));
   if(Number.isFinite(chirality)&&Math.abs(chirality)>.04)
@@ -256,8 +383,12 @@ export function resolveHand({entryU=null,labels=[],direction=null,wristDx=null,c
   }
   let labelScore=0,labelCount=0;
   for(const {label,score} of labels){
-    if(label==='Left')labelScore+=score??.5;
-    else if(label==='Right')labelScore-=score??.5;
+    // The vendored landmarker (tasks-vision 0.10.32 bundle) names the PHYSICAL hand on an
+    // unmirrored feed — it does NOT apply MediaPipe's documented selfie assumption. Verified
+    // live: under the selfie interpretation every overlay letter came out swapped. Mirrored
+    // feeds are already label-flipped at the shell boundary before reaching here.
+    if(label==='Right')labelScore+=score??.5;
+    else if(label==='Left')labelScore-=score??.5;
     labelCount++;
   }
   if(labelCount&&labelScore)cast(labelScore>0,.6*Math.min(1,Math.abs(labelScore)/labelCount*2));
@@ -276,13 +407,23 @@ export function resolveHand({entryU=null,labels=[],direction=null,wristDx=null,c
 export const DEFAULTS={
   startClosing:.8,    // m/s — closing speed for the instant-fire gate and "born fast" evidence
   stopClosing:.3,     // m/s — below this at the end of the data, a censored track is not mid-punch
-  minPeak:1.2,        // m/s — peak fitted closing speed a punch must reach
+  minPeak:1.0,        // m/s — peak measured closing speed a punch must reach. Measured as a
+                      // windowed LINEAR slope over rigid samples (see #extract), which reads the
+                      // punch's sustained closing rather than an instantaneous spike — honest and
+                      // stable, but ~20-30% under the true peak, so the gate sits at 1.0 where the
+                      // old spiky estimate sat at 1.2. Lazy reaches measure 0.2-0.5; real soft
+                      // jabs 1.1-1.8.
   minTravel:.08,      // m   — range it must actually close
   contactDepth:.12,   // m   — a punch reaching this close fires immediately, without waiting for
                       // apex. Deliberately deep: a committed jab crosses 20 cm ~50-100 ms before
                       // full extension (and near-camera depth noise dips the fitted range under an
                       // early line even sooner), so a shallow trigger reported mid-flight
                       // positions and consumed the real apex. At 12 cm the crossing IS the landing.
+  strikeRange:.45,    // m   — a punch ARRIVES: its apex must come within striking range of the
+                      // head. Approach shape alone is not sufficient evidence — any inward
+                      // lateral guard shift closes range geometrically (r=|p| shrinks by the
+                      // lateral slack r−z), which fired phantom "hooks" whose apex sat 57 cm out.
+                      // No jab, hook or uppercut terminates half a metre from the face.
   rearmGap:.07,       // m   — withdrawal required after a fire before the next punch can register
   maxDepth:1.6,       // m   — beyond this the "hand" is not a punch in progress
   minFist:.12,        // closure the hand must show at some point in the approach (lenient: a fist
@@ -293,7 +434,9 @@ export const DEFAULTS={
 // the decelerating tail of their flight. A track born against a frame border (or born already
 // fast) is judged on these softened gates, because arriving from off-camera already travelling is
 // itself the evidence of a punch.
-export const EDGE_MARGIN=.14,EDGE_PEAK=.45,EDGE_REACH=.035;
+export const EDGE_MARGIN=.14,EDGE_PEAK=.35,EDGE_REACH=.035;   // EDGE_PEAK rides the same
+// recalibration as minPeak: the windowed-linear speed measure reads ~25% under the old spiky
+// quadratic, and a truncated hook's decelerating tail measured 0.41 against the old 0.45.
 // Born already closing this fast means the punch predates the track (a 20 fps hook can materialise
 // inside the edge margin between two samples). Set well above guard jitter and the odd twitch —
 // a genuinely mid-flight hook measures 2+ m/s at its first sample pair.
@@ -309,6 +452,28 @@ const WINDUP_MS=450;        // how far back the start of a punch is looked for
 const IMAGE_GATE=.20,IMAGE_GATE_PER_SECOND=.9;   // association gate, growing with the sample gap
 const SAME_REGION_MS=280;   // two apexes closer than this with overlapping support are one punch
 const MERGE_GATE=.22;       // image distance that counts as overlapping support
+const SAME_FIST_MS=400;     // a candidate this soon after a fire, whose identity never coexisted
+                            // with the one that fired, is the same fist re-tracked after blur —
+                            // unless both sightings independently observed a complete punch
+const COEXIST_MS=60;        // landmark-span overlap that proves two identities are two objects
+const REST_SPEED=.45;       // image speed (u/s) below which a fist counts as resting
+const REST_RUN=8;           // consecutive slow samples before rest accrues — longer than an apex
+                            // hold, much shorter than a guard
+const REST_MIN_W=4;         // rest evidence required before lineage may vote on handedness
+const REST_ALPHA=.12;       // EMA rate of the learned rest position
+const RIGID_SUPPORT=.4;     // fraction of a candidate's claimed travel that must be witnessed by
+                            // rigid-fit samples. Span-depth and blob expansion can CARRY an
+                            // already-observed approach through blur, but they can never
+                            // constitute one: a fist held still at the lens had its span-depth
+                            // oscillate ±8 cm as fingers clipped the frame, and every fabricated
+                            // dip fired an "instant" punch at superhuman speed.
+const RIGID_CONFIRM_MS=150; // rigid samples this soon after the apex still witness the approach —
+                            // reacquired landmarks at the start of the retraction reveal how deep
+                            // the fist actually got, even when the apex itself was blob-carried
+const IMMINENT_MS=120;      // a censored punch was cut mid-flight; it arrives if its trailing
+                            // closing speed would have carried it into striking range this soon
+const HEAD_FLOOR=1.15;      // × headRadii[1] below centre — arrivals below this are chest/shoulder
+                            // height, and there is no head there to hit; ignored outright
 const TERMINAL_MS=220,TERMINAL_AFTER_MS=50;      // solver window around the apex
 const CONTACT_RANGE=.10;    // m of range above the closest approach within which the fist can
                             // actually touch the face — the contact-eligible slice of the flight
@@ -327,6 +492,16 @@ const BUFFER_MS=1400,MAX_SLOTS=4,EVENT_MEMORY_MS=1000;
 
 let nextSlotId=0;
 
+// Two identities are two OBJECTS only if they were ever seen at the same time: fragments of one
+// fist take turns (blur kills the first before reacquisition births the second), while two real
+// fists overlap on screen. Landmark spans only — blob-bridged samples keep a dead identity's
+// buffer warm without proving anyone saw the object itself.
+function coexisted(a,b){
+  if(a===b)return true;
+  if(a.firstObsT===null||b.firstObsT===null)return false;
+  return Math.min(a.lastObsT,b.lastObsT)-Math.max(a.firstObsT,b.firstObsT)>=COEXIST_MS;
+}
+
 class Slot{
   constructor(u,v,time){
     this.id=`s${++nextSlotId}`;
@@ -334,6 +509,9 @@ class Slot{
     this.consumedUntil=-1e9;
     this.rearm=null;             // {min} — fired; wait for r to regain rearmGap
     this.lastSeen=time;this.u=u;this.v=v;this.du=0;this.dv=0;
+    this.pu=u;this.pv=v;this.pdu=0;this.pdv=0;this.pt=time;   // blob-informed predicted position
+    this.firstObsT=null;this.lastObsT=null;                   // landmark span, for coexistence
+    this.restU=null;this.restW=0;this.slowRun=0;              // guard lineage (see push)
     this.bornAtEdge=u<EDGE_MARGIN||u>1-EDGE_MARGIN||v<EDGE_MARGIN||v>1-EDGE_MARGIN;
     this.bornFast=false;
     this.lastFireT=null;         // windup for a later punch never reaches back across a fire
@@ -345,6 +523,13 @@ class Slot{
     for(const [name,tally] of this.labels)if(tally>score){best=name;score=tally;}
     return best;
   }
+  // Where this identity should be at time t. Blob samples advance this state (position always,
+  // velocity when the blob carried a measured flow), so the prediction follows a fist through the
+  // blur that killed its landmarks instead of extrapolating the stale pre-blur velocity.
+  predictAt(t){
+    const dt=clamp((t-this.pt)/1000,0,.5);
+    return [this.pu+this.pdu*dt,this.pv+this.pdv*dt];
+  }
 }
 
 export class PunchExtractor{
@@ -353,7 +538,7 @@ export class PunchExtractor{
     this.slots=new Map();
     this.blobs=[];               // global motion-blob buffer: {t,u,v,mass,spread,flow,expand}
     this.recent=[];              // emitted events: {t,u,v}
-    this.stats={impacts:0,stale:0,merged:0,refractory:0,rejected:''};
+    this.stats={impacts:0,stale:0,merged:0,refractory:0,ignored:0,rejected:''};
     this.debug={phase:'idle',r:null,closing:0,peak:0,travel:0,minRange:null,slot:'—'};
   }
   reset(){this.slots.clear();this.blobs.length=0;this.recent.length=0;}
@@ -368,8 +553,12 @@ export class PunchExtractor{
     for(const slot of this.slots.values())if(slot.lastSeen-timestamp>400){this.reset();break;}
     const open=[...this.slots.values()],pairs=[];
     for(const d of detections)for(const slot of open){
+      // Position from the blob-informed prediction (it followed the arc through any blur gap);
+      // gate growth from LANDMARK silence — uncertainty about identity grows while nobody has
+      // actually seen the hand, however confidently the motion stream tracked something.
       const dt=clamp((timestamp-slot.lastSeen)/1000,0,.5);
-      const gap=Math.hypot(d.u-(slot.u+slot.du*dt),d.v-(slot.v+slot.dv*dt));
+      const [pu,pv]=slot.predictAt(timestamp);
+      const gap=Math.hypot(d.u-pu,d.v-pv);
       if(gap<=IMAGE_GATE+IMAGE_GATE_PER_SECOND*dt)pairs.push({d,slot,gap});
     }
     pairs.sort((a,b)=>a.gap-b.gap);
@@ -390,20 +579,75 @@ export class PunchExtractor{
     return out;
   }
 
-  // One fused observation. `p` is the camera-frame metric position; `quality` weights the sample
-  // in every fit ('rigid' from the 6-DOF pose solve, 'span' from apparent size when the solve
-  // failed, 'blob' from the motion stream).
+  /**
+   * A hand was SEEN at (u,v) but could not be measured in 3D — no pose solve, and no recent fit
+   * to carry depth from. Identity is updated (association prediction, liveness, rest lineage)
+   * and nothing enters the trajectory.
+   *
+   * This separation is the whole point: being tracked and being measured are different things.
+   * The old 'loose' tier guessed depth from apparent knuckle width in exactly this situation,
+   * and since a punch lasts ~200 ms while "no fit for 400 ms" only happens to a fist parked at
+   * the lens, it never once carried a real punch — it only fabricated approaches out of fingers
+   * clipping the frame. Seeing a hand is worth remembering; inventing its depth is not.
+   */
+  observe(slot,{t,u,v}){
+    if(!Number.isFinite(t)||!Number.isFinite(u)||!Number.isFinite(v))return;
+    this.#track(slot,t,u,v);
+  }
+
+  // Identity bookkeeping shared by measured samples and see-only observations.
+  #track(slot,t,u,v){
+    const dt=(t-slot.lastSeen)/1000;
+    if(dt>1e-3&&dt<.5){
+      slot.du=(u-slot.u)/dt;slot.dv=(v-slot.v)/dt;
+      // Guard lineage: a fist SUSTAINEDLY slow in the image is a fist at rest, and where it
+      // rests says which hand it is (the puncher's right guards at low u) — evidence that
+      // survives however badly the punch itself later blurs. The run requirement keeps the
+      // apex hold out: a punch pauses at full extension for a few frames, a guard rests for many.
+      if(Math.hypot(slot.du,slot.dv)<REST_SPEED){
+        if(++slot.slowRun>=REST_RUN){
+          slot.restU=slot.restU===null?u:slot.restU+(u-slot.restU)*REST_ALPHA;
+          slot.restW=Math.min(slot.restW+1,60);
+        }
+      }else slot.slowRun=0;
+    }
+    slot.u=u;slot.v=v;slot.lastSeen=t;slot.bridged=0;
+    slot.pu=u;slot.pv=v;slot.pdu=slot.du;slot.pdv=slot.dv;slot.pt=t;
+    if(slot.firstObsT===null)slot.firstObsT=t;
+    slot.lastObsT=Math.max(slot.lastObsT??t,t);
+  }
+
+  // One fused observation. `p` is the camera-frame metric position; `quality` says how it was
+  // measured: 'rigid' from the 6-DOF pose solve (the only true measurement), 'span' from a
+  // failed solve with depth carried inertially from the last rigid fit, 'blob' from the motion
+  // stream. Only 'rigid' may speak about depth — see `#solve`.
   push(slot,obs){
-    const {t,u,v,p,closure=1,kn=null,label=null,score=1,quality='rigid',wristDx=null,chirality=null}=obs;
+    const {t,u,v,p,closure=1,kn=null,label=null,score=1,quality='rigid',wristDx=null,chirality=null,axis=null}=obs;
     if(!finite3(p)||!Number.isFinite(t))return;
     const r=hyp3(...p);
     if(r>this.options.maxDepth){this.stats.rejected='too far to be a punch';return;}
-    const dt=(t-slot.lastSeen)/1000;
-    if(dt>1e-3&&dt<.5&&quality!=='blob'){slot.du=(u-slot.u)/dt;slot.dv=(v-slot.v)/dt;}
-    if(quality!=='blob'){slot.u=u;slot.v=v;slot.lastSeen=t;slot.bridged=0;}
+    // Re-arm withdrawal must be OBSERVED, by rigid-fit samples. The fitted range blends span and
+    // blob evidence, and fabricated depth (a fist held at the lens, span oscillating as fingers
+    // clip the frame; a body swaying behind a still fist) used to swing r far enough to clear the
+    // re-arm — after which the next fabricated dip fired again, about once a second, forever.
+    if(quality==='rigid'&&slot.rearm){
+      slot.rearm.min=Math.min(slot.rearm.min,r);
+      if(r>=slot.rearm.min+this.options.rearmGap)slot.rearm.cleared=true;
+    }
+    if(quality!=='blob')this.#track(slot,t,u,v);
+    else{
+      // The motion stream steers the slot's PREDICTED position through landmark silence. Blur
+      // destroys landmarks mid-arc, and extrapolating the stale pre-blur velocity made
+      // reacquired landmarks miss the association gate and fork a second identity — the root of
+      // most duplicate events. Blob centroids are arm-biased, so they steer prediction only;
+      // landmark liveness (lastSeen) and the slot's measured position stay landmark-owned.
+      slot.pu=u;slot.pv=v;slot.pt=t;
+      if(Number.isFinite(obs.du))slot.pdu=obs.du;
+      if(Number.isFinite(obs.dv))slot.pdv=obs.dv;
+    }
     if(label)slot.labels.set(label,(slot.labels.get(label)??0)+(score??.5));
     const w=quality==='rigid'?1:quality==='span'?.3:.12;
-    const samples=slot.samples,sample={t,u,v,p:[...p],r,w,closure,kn:finite3(kn)?[...kn]:null,label,score,quality,wristDx,chirality};
+    const samples=slot.samples,sample={t,u,v,p:[...p],r,w,closure,kn:finite3(kn)?[...kn]:null,label,score,quality,wristDx,chirality,axis};
     // Keep time order even if two in-flight frames resolved out of order.
     let i=samples.length;while(i>0&&samples[i-1].t>t)i--;
     samples.splice(i,0,sample);
@@ -437,8 +681,10 @@ export class PunchExtractor{
     const from=Math.max(slot.lastSeen,last.t);
     for(const blob of this.blobs){
       if(blob.t<=from||blob.t>slot.lastSeen+BLOB_BRIDGE_MS)continue;
-      const dt=clamp((blob.t-slot.lastSeen)/1000,0,.4);
-      const gap=Math.hypot(blob.u-(slot.u+slot.du*dt),blob.v-(slot.v+slot.dv*dt));
+      // Gated against the blob-informed prediction, so successive blobs chain along a curving
+      // arc instead of falling out of a straight-line extrapolation from the last landmark.
+      const [pu,pv]=slot.predictAt(blob.t);
+      const gap=Math.hypot(blob.u-pu,blob.v-pv);
       if(gap>BLOB_GATE)continue;
       const prev=slot.samples[slot.samples.length-1];
       const step=clamp((blob.t-prev.t)/1000,0,.2);
@@ -449,7 +695,7 @@ export class PunchExtractor{
       // mass (fist + forearm), biased toward the arm — hence the low sample weight.
       const x=(blob.u*2-1)*z*(blob.kx??.77);
       const y=(1-blob.v*2)*z*(blob.ky??.58);
-      this.push(slot,{t:blob.t,u:blob.u,v:blob.v,p:[x,y,z],quality:'blob'});
+      this.push(slot,{t:blob.t,u:blob.u,v:blob.v,p:[x,y,z],quality:'blob',du:blob.du,dv:blob.dv});
       slot.bridged++;
     }
   }
@@ -484,8 +730,9 @@ export class PunchExtractor{
     // consumes everything seen so far, because whatever minimum formed while it was pending (an
     // instant fire's own later apex, most importantly) is part of the punch that already fired.
     if(slot.rearm){
-      slot.rearm.min=Math.min(slot.rearm.min,latest.r);
-      if(latest.r>=slot.rearm.min+o.rearmGap){
+      // Cleared only by rigid-observed withdrawal (tracked in push): a fist that never visibly
+      // pulls back stays spent, however wildly span or blob depth swings around it.
+      if(slot.rearm.cleared){
         slot.rearm=null;
         slot.consumedUntil=Math.max(slot.consumedUntil,latest.t);
         return null;
@@ -500,7 +747,12 @@ export class PunchExtractor{
     // punch losing its landing to blur, not a hand drifting to a stop.
     let trailingClosing=0;
     for(const f of fitted)if(f.t>=latest.t-150&&f.closing>trailingClosing)trailingClosing=f.closing;
-    const censorable=now-slot.lastSeen>o.graceMs&&trailingClosing>=o.stopClosing;
+    // Censoring runs from the last EVIDENCE, blob bridge included: while the motion stream is
+    // still carrying the trajectory, the punch is not lost — it is heading for a measurable
+    // reversal (the bracketed path) or for landmark reacquisition into this same slot. Firing on
+    // landmark silence alone decided the event ~160 ms after the blur started, from half the
+    // punch, and the better-solved continuation then had to be deduplicated away.
+    const censorable=now-latest.t>o.graceMs&&trailingClosing>=o.stopClosing;
     // The retreat that confirms an apex must be sustained: at least two fitted samples above the
     // confirm line, held for CONFIRM_HOLD_MS, with the trajectory still up there NOW. A noise
     // bounce fails all three within a tick or two (the fist drives past the false minimum and the
@@ -525,9 +777,25 @@ export class PunchExtractor{
     const windupFloor=Math.max(at.t-WINDUP_MS,slot.lastFireT??-1e12);
     const windup=fitted.filter(f=>f.t>=windupFloor&&f.t<=at.t);
     let startRange=at.r,peak=0;
-    for(const f of windup){if(f.r>startRange)startRange=f.r;if(f.closing>peak)peak=f.closing;}
+    for(const f of windup)if(f.r>startRange)startRange=f.r;
+    // PEAK CLOSING is measured on rigid samples alone whenever they can carry a fit. Blending
+    // frozen-depth fallbacks into the slope corrupts it both ways: interleaved, they flatten it
+    // (a real jab measured 1.13 m/s against the 1.2 gate and was rejected — 'why does this not
+    // register as any punch at all'); as a plateau ending in one rigid catch-up, they read as a
+    // staircase step that inflated a soft 1.5 m/s jab to 3.4. The blended series keeps owning
+    // apex timing, bracketing and censoring, where span/blob continuity is the whole point —
+    // but speed is a measurement, and only measurements may set it.
+    const rigidWindup=slot.samples.filter(s=>s.quality==='rigid'&&s.t>=windupFloor&&s.t<=at.t+RIGID_CONFIRM_MS);
+    if(rigidWindup.length>=3){
+      for(const f of windup){
+        const slope=linearSlope(rigidWindup,x=>x.r,f.t,FIT_HALF_MS*1.4);
+        if(slope!==null&&-slope>peak)peak=-slope;
+      }
+    }else for(const f of windup)if(f.closing>peak)peak=f.closing;
     for(const s of slot.samples){
       if(s.t<windupFloor||s.t>at.t)continue;
+      // Blob depth is expansion-integrated off an arm-biased centroid; it must not inflate the
+      // claimed travel it cannot witness.
       if(s.quality!=='blob'&&s.r>startRange)startRange=s.r;
     }
     const travel=startRange-at.r;
@@ -555,7 +823,37 @@ export class PunchExtractor{
     if(kind!=='instant'&&peak<o.stopClosing)return reject(null);
     if(kind!=='instant'&&peak<peakGate)return reject(`peak ${peak.toFixed(2)} < ${peakGate.toFixed(2)}${edge?' (edge)':''}`);
     if(travel<reachGate)return reject(`reach ${(travel*100).toFixed(0)}cm < ${(reachGate*100).toFixed(0)}cm${edge?' (edge)':''}`);
+    // The approach must be MEASURED, not manufactured. The range a candidate claims to have
+    // closed has to be substantially witnessed by MEASURED samples: rigid fits, and anchored
+    // 'span' fallbacks — whose lateral is honest and whose depth is frozen, so they can only
+    // UNDERSTATE closure (a blurred hook closes range mostly laterally, and rigid-only
+    // witnessing starved exactly those). Blob expansion may CARRY an approach through blur (the
+    // censored path), but it can never constitute one. Witnesses
+    // shortly AFTER the apex count too: landmarks reacquired at the start of the retraction
+    // reveal how deep the fist actually got when the apex itself was blob-carried.
+    let rigidMax=-Infinity,rigidMin=Infinity;
+    for(const s of slot.samples){
+      if(s.t<windupFloor||s.t>at.t+RIGID_CONFIRM_MS)continue;
+      if(s.quality!=='rigid'&&s.quality!=='span')continue;
+      if(s.r>rigidMax)rigidMax=s.r;
+      if(s.r<rigidMin)rigidMin=s.r;
+    }
+    const rigidTravel=rigidMax>rigidMin?rigidMax-rigidMin:0;
+    // Two ways to be witnessed: most of the claimed travel was rigid-observed, or the
+    // rigid-observed part alone is a full punch-scale approach (a fist whose first frames of
+    // template convergence — or whose blurred terminal — degraded to fallback samples still
+    // closed an unsoftened minTravel on rigid evidence).
+    if(rigidTravel<travel*RIGID_SUPPORT&&rigidTravel<o.minTravel)
+      return reject(`approach unverified (${(rigidTravel*100).toFixed(0)} of ${(travel*100).toFixed(0)}cm rigid)`);
     if(closureMax<o.minFist)return reject(`open hand (closure ${closureMax.toFixed(2)})`);
+    // A punch ARRIVES. Approach shape alone is not sufficient: any inward lateral guard shift
+    // closes range geometrically (by the lateral slack r−z, 6-11 cm from a normal guard — right
+    // in the travel gates' band) and brackets itself on the shift back, but no jab, hook or
+    // uppercut terminates half a metre from the face. A censored candidate was cut mid-flight,
+    // so it is judged on imminent arrival: where its trailing closing speed was about to put it.
+    const arrive=kind==='censored'?at.r-trailingClosing*(IMMINENT_MS/1000):at.r;
+    if(arrive>o.strikeRange)
+      return reject(`stopped ${(at.r*100).toFixed(0)}cm from the head (> ${(o.strikeRange*100).toFixed(0)}cm)`);
     if(kind==='apex'){
       // The contact is the FIRST arrival into the deepest zone, not the deepest sample. A hook's
       // retraction can re-cross the closest region and dip the range BELOW the forward crossing;
@@ -583,12 +881,26 @@ export class PunchExtractor{
     return {slot,kind,at,fitted,startRange,travel,peak,closureMax,windupFloor,censored:kind==='censored'};
   }
 
-  // One event per physical punch, across identities: a candidate whose apex sits within
-  // SAME_REGION_MS and MERGE_GATE of an already-emitted event is another view of the same strike.
+  // One event per physical punch, across identities. Another view of a just-emitted strike is
+  // recognised two ways. (1) Image support: a candidate within SAME_REGION_MS and MERGE_GATE of
+  // the event is the same fist seen twice at the same spot (duplicate detections). (2) Temporal
+  // exclusivity: blur can displace the image position arbitrarily far between two sightings of
+  // one fist — a hook crosses a third of the frame while its landmarks are dead — so no image
+  // gate can catch a sequential fragment; but blur cannot make one fist appear twice AT ONCE.
+  // Two real fists coexist on screen; fragments take turns. A candidate whose identity never
+  // coexisted with the identity that fired is therefore the same fist re-tracked — with one
+  // exemption: when BOTH sightings independently observed a complete punch (approach -> apex ->
+  // sustained retreat), they are two punches thrown through a tracking dropout (a real double),
+  // while a censored or instant fire means the evidence stopped mid-punch and whatever continues
+  // it belongs to it.
   #suppressed(candidate,now){
     for(const e of this.recent){
-      if(Math.abs(candidate.at.t-e.t)>SAME_REGION_MS&&now-e.emittedAt>SAME_REGION_MS)continue;
-      if(Math.hypot(candidate.at.s.u-e.u,candidate.at.s.v-e.v)<=MERGE_GATE)return true;
+      const apart=Math.abs(candidate.at.t-e.t),age=now-e.emittedAt;
+      if((apart<=SAME_REGION_MS||age<=SAME_REGION_MS)
+        &&Math.hypot(candidate.at.s.u-e.u,candidate.at.s.v-e.v)<=MERGE_GATE)return true;
+      if((apart<=SAME_FIST_MS||age<=SAME_FIST_MS)
+        &&e.slot&&!(e.complete&&candidate.kind==='apex')
+        &&!coexisted(candidate.slot,e.slot))return true;
     }
     return false;
   }
@@ -603,14 +915,24 @@ export class PunchExtractor{
   // Solve the event from its window: one quadratic per axis around the apex gives position and
   // velocity as smooth functions of time; every reported number reads off that same fit, so
   // location, velocity and direction can no longer disagree about which instant they describe.
-  #solve(candidate,{gain,headRadii}){
+  #solve(candidate,{gain,headRadii,now}){
     const {slot,at,kind}=candidate;
+    // TRAVEL — the direction the punch was going, which decides its type and its impact vector —
+    // is solved on MEASURED samples only. A fallback sample's depth is frozen (span) or absent,
+    // so a velocity fitted through one reads dz ≈ 0; for a straight punch, whose entire velocity
+    // IS dz, the normalised direction then collapses onto whatever lateral and vertical noise is
+    // left over, and "mostly up" reads as an uppercut. Jabs were being logged as uppercuts and
+    // hooks for exactly this reason. Position may still use every sample (image position is
+    // honest in all tiers); velocity may not. When the terminal window holds too few rigid
+    // samples to fit, the direction falls through to the chord below rather than inventing one.
+    const solid=slot.samples.filter(s=>s.quality==='rigid');
+    const trail=solid.length>=3?solid:slot.samples;
     const tApex=kind==='censored'?at.t+CENSOR_EXTRAP_MS:at.t;
     const apexP=stateAt(slot.samples,tApex,FIT_HALF_MS)?.position??at.s.p;
     // Where the terminal approach began — anchors both the measured sweep (which drives the entry
     // solve) and the chord fallback for direction.
     const tStart=Math.max(slot.samples[0]?.t??at.t,candidate.windupFloor,at.t-TERMINAL_MS);
-    const startP=stateAt(slot.samples,tStart,FIT_HALF_MS)?.position??candidate.fitted[0].s.p;
+    const startP=stateAt(trail,tStart,FIT_HALF_MS)?.position??candidate.fitted[0].s.p;
     const chord=(()=>{
       const d=[0,1,2].map(k=>apexP[k]-startP[k]),len=hyp3(...d);
       return len>1e-4?d.map(v=>v/len):[0,0,-1];
@@ -625,7 +947,7 @@ export class PunchExtractor{
     // qualifying probes rather than read from one, so per-probe noise cannot steer the report.
     const probes=[];
     for(let t=at.t-TERMINAL_MS;t<=tApex;t+=10){
-      const state=stateAt(slot.samples,t,70);
+      const state=stateAt(trail,t,70);
       if(!state)continue;
       const range=hyp3(...state.position);
       const closing=range>1e-4?-(state.velocity[0]*state.position[0]+state.velocity[1]*state.position[1]+state.velocity[2]*state.position[2])/range:0;
@@ -662,6 +984,16 @@ export class PunchExtractor{
     }
     const knLen=knW?hyp3(...kn):0;
     const knuckleNormal=knLen>1e-6?toHead(kn.map(v=>v/knLen)):null;
+    // The IMAGE-plane hand axis over the same window — the jab/uppercut discriminator, averaged
+    // so a single frame's landmark jitter cannot decide a punch's type. Already head-frame
+    // (+du = head +x, +dv = up) and expressed in fist-widths, so it is directly comparable
+    // between punches at any distance.
+    let axisU=0,axisV=0,axisF=0,axisW=0;
+    for(const s of slot.samples){
+      if(s.t<at.t-TERMINAL_MS||s.t>at.t+TERMINAL_AFTER_MS||!s.axis)continue;
+      axisU+=s.axis.du*s.w;axisV+=s.axis.dv*s.w;axisF+=(s.axis.facing??1)*s.w;axisW+=s.w;
+    }
+    const handAxis=axisW?{du:axisU/axisW,dv:axisV/axisW,facing:axisF/axisW}:null;
     // Labels, confidence, wrist trail and chirality over the window.
     const labels=[];let confidence=0,confW=0,closure=0;
     let wristSum=0,wristW=0,chirSum=0,chirW=0;
@@ -697,20 +1029,58 @@ export class PunchExtractor{
     const speed=Math.max(candidate.peak,speedAt);
     // The approach's start, bounded by the windup so a long-idle buffer cannot masquerade as an
     // entry. Image sweep is measured from here to the apex — in head-frame image units, so +du is
-    // head +x and +dv is up.
-    const first=candidate.fitted.find(f=>f.t>=candidate.windupFloor)??candidate.fitted[0];
+    // head +x and +dv is up. Anchored on RAW samples, like the travel measurement above: a
+    // gate-fail rejection mid-approach consumes fitted coverage, and a sweep measured from the
+    // leftovers undercounted exactly the truncated hooks whose sweep is their classification.
+    let firstS=null;
+    for(const s of slot.samples){
+      if(s.t<candidate.windupFloor||s.t>at.t||s.quality==='blob')continue;
+      firstS=s;break;
+    }
+    const first={s:firstS??candidate.fitted[0].s};
     const entryHead=toHead(first.s.p).map(v=>v*gain);
-    const sweep={du:-(at.s.u-first.s.u),dv:-(at.s.v-first.s.v)};
+    // Looming masquerades as sweep: an approaching fist's image position diverges radially AWAY
+    // from the frame centre (u−.5 ∝ x/z), so a jab thrown above the low-slung laptop camera
+    // "rises" in the image and an off-centre jab "sweeps" — with zero lateral motion — which
+    // classified dead-straight high jabs as uppercuts. Real punch travel is never outward-radial:
+    // hooks cross the frame, uppercuts climb TOWARD the centre from below. Remove the
+    // outward-radial component before classification; near the centre divergence is negligible
+    // and no meaningful radial direction exists, so the correction is skipped.
+    let su=at.s.u-first.s.u,sv=at.s.v-first.s.v;
+    const mu=(first.s.u+at.s.u)/2-.5,mv=(first.s.v+at.s.v)/2-.5,away=Math.hypot(mu,mv);
+    if(away>=.08){
+      const proj=(su*mu+sv*mv)/away;
+      if(proj>0){su-=proj*mu/away;sv-=proj*mv/away;}
+    }
+    const sweep={du:-su,dv:-sv};
     // The entry-side vote is only cast when the entry is trustworthy: a slow (guard-anchored)
     // birth, or a genuine outer-edge entry. A hook first detected mid-arc near frame centre used
     // to cast it arbitrarily — which is exactly how right hooks got logged as left.
     const entryTrusted=!candidate.slot.bornFast||first.s.u<.34||first.s.u>.66;
+    // Hand lineage. The strongest handedness evidence is not in the punch at all: (a) where this
+    // identity RESTED before it flew — the puncher's right fist guards at low u — and (b)
+    // elimination: a fist visibly resting somewhere else right now is not the fist that just
+    // landed, so the punch belongs to the other hand. (b) only fills in when (a) is absent (a
+    // mid-flight birth with no guard history), because a duplicate identity of the striker parked
+    // at the same guard spot would otherwise vote against it.
+    const restU=slot.restW>=REST_MIN_W?slot.restU:null;
+    let otherRestU=null;
+    if(restU===null)for(const other of this.slots.values()){
+      if(other===slot||other.restW<REST_MIN_W||other.slowRun<REST_RUN)continue;
+      if(now-other.lastSeen>250)continue;                                  // resting NOW, on camera
+      if(Math.hypot(other.u-at.s.u,other.v-at.s.v)<=MERGE_GATE)continue;   // another view of the striker
+      otherRestU=other.restU;break;
+    }
     const {hand,confidence:handConfidence,votes:handVotes}=resolveHand({
       entryU:entryTrusted?first.s.u:null,labels,direction,
       wristDx:wristW?wristSum/wristW:null,
       chirality:chirW?chirSum/chirW:null,
+      restU,otherRestU,
     });
-    const mode=classifyMode({direction,knuckleNormal,entry:entryHead,curvature,sweep});
+    // `why` names the branch that decided the type — the live log shows it, so a misclassified
+    // punch reports which evidence convinced the classifier instead of having to be guessed at.
+    const detail={why:''};
+    const mode=classifyMode({direction,knuckleNormal,entry:entryHead,curvature,sweep,handAxis,range:at.r},detail);
     // Impact = the FIRST point of the measured trajectory that touches the face: walk the fitted
     // path forward in time, keep only the slice within CONTACT_RANGE of the closest approach (a
     // jab crosses the silhouette laterally half a metre out, where nothing can touch), and take
@@ -750,8 +1120,9 @@ export class PunchExtractor{
       lateral:{x:apexP[0],y:apexP[1]},depth:Math.abs(apexP[2]),range:at.r,
       travel:candidate.travel,closure:closure||candidate.closureMax,
       confidence:confW?clamp(confidence/confW,0,1):.5,
-      knuckleNormal,curvature,sweep,sweepMetric,
-      mode,hand,handConfidence,handVotes,
+      knuckleNormal,handAxis,curvature,sweep,sweepMetric,
+      mode,why:detail.why,hand,handConfidence,handVotes,lineage:{restU,otherRestU},
+      solidSamples:solid.length,
       timestamp:candidate.at.t,stale:candidate.censored,instant:kind==='instant',
       slot:slot.id,label:slot.label,
       samples:slot.samples.filter(s=>s.t>=at.t-WINDUP_MS&&s.t<=at.t+TERMINAL_AFTER_MS).length,
@@ -791,20 +1162,21 @@ export class PunchExtractor{
         continue;
       }
       if(emitted){
-        // Two candidates in one tick: if their support overlaps, the second is the same punch
-        // under another identity; if genuinely distinct it survives to the next tick untouched.
-        if(Math.hypot(candidate.at.s.u-emitted.at.s.u,candidate.at.s.v-emitted.at.s.v)<=MERGE_GATE){
+        // Two candidates in one tick: overlapping support, or two identities that never coexisted
+        // (same complete-punch exemption as #suppressed) — either way one strike; a genuinely
+        // distinct punch survives to the next tick untouched.
+        if(Math.hypot(candidate.at.s.u-emitted.at.s.u,candidate.at.s.v-emitted.at.s.v)<=MERGE_GATE
+          ||(!(emitted.kind==='apex'&&candidate.kind==='apex')&&!coexisted(candidate.slot,emitted.slot))){
           this.#consume(candidate,candidate.at.t);
           this.stats.merged++;
         }
         continue;
       }
-      const event=this.#solve(candidate,{gain,headRadii});
+      const event=this.#solve(candidate,{gain,headRadii,now});
       const confirm=candidate.fitted.find(f=>f.t>candidate.at.t+15&&f.r>=candidate.at.r+CONFIRM_RISE);
       this.#consume(candidate,Math.max(candidate.at.t,confirm?.t??now));
-      if(candidate.censored)this.stats.stale++;
-      this.stats.rejected='';
-      this.recent.push({t:candidate.at.t,u:candidate.at.s.u,v:candidate.at.s.v,emittedAt:now});
+      this.recent.push({t:candidate.at.t,u:candidate.at.s.u,v:candidate.at.s.v,emittedAt:now,
+        slot:candidate.slot,complete:candidate.kind==='apex'});
       // A strike spends every nearby mid-approach view of itself, whichever identity it wears.
       for(const other of this.slots.values()){
         if(other===candidate.slot)continue;
@@ -813,6 +1185,17 @@ export class PunchExtractor{
           other.rearm={min:candidate.at.r};
         }
       }
+      // Below the head there is nothing to hit: a strike arriving at chest/shoulder height is
+      // ignored outright — no hit, no miss, no log line. It still consumed its evidence and
+      // entered the arbitration memory above, so its fragments cannot resurface as events. The
+      // check runs AFTER classification steered the entry (an uppercut travels THROUGH chest
+      // height but arrives at the chin, so only its classification proves it was not a body shot).
+      if((event.missed?event.aim[1]:event.point[1])<-headRadii[1]*HEAD_FLOOR){
+        this.stats.ignored++;
+        continue;
+      }
+      if(candidate.censored)this.stats.stale++;
+      this.stats.rejected='';
       this.stats.impacts++;
       emitted=candidate;emitted.event=event;
     }

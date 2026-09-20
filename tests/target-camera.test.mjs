@@ -17,14 +17,14 @@ function rig(options={}){
  * camera. `path` gives a full 3D trajectory (hooks, uppercuts); `blob` synthesises the worker's
  * motion stream.
  */
-function drive(tracking,at,{duration=.8,step=1/60,seed=5,vanishBelow=null,lateral=[0,0],label='Right',motion=.05,path=null,flicker=false,blob=null,mirror=false}={}){
+function drive(tracking,at,{duration=.8,step=1/60,seed=5,vanishBelow=null,lateral=[0,0],label='Right',motion=.05,path=null,flicker=false,blob=null,mirror=false,pitch=FACING,yaw=0,roll=0}={}){
   const camera=new PinholeCamera({fovDegrees:tracking.fovDegrees,viewAspect:4/3,sourceAspect:4/3});
   const random=makeRandom(seed),impacts=[];
   for(let ms=0;ms<=duration*1000;ms+=step*1000){
     const state=path?path(ms/1000):{lateral,depth:at(ms/1000)};
     const depth=state.depth,here=state.lateral;
     const gone=vanishBelow!==null&&depth<vanishBelow;
-    const o=observe({position:[here[0],here[1],-depth],rotation:{pitch:FACING},closure:1},camera,random);
+    const o=observe({position:[here[0],here[1],-depth],rotation:{pitch,yaw,roll},closure:1},camera,random);
     // A horizontally mirrored camera: what MediaPipe would emit for the flipped frame.
     if(mirror){
       o.landmarks=o.landmarks.map(p=>({x:1-p.x,y:p.y,z:p.z}));
@@ -102,7 +102,7 @@ test('a fist that blurs out at full extension still lands',()=>{
 test('the motion stream carries a blur-dead punch to a confirmed apex through the shell',()=>{
   const tracking=rig();
   const camera=new PinholeCamera({fovDegrees:60,viewAspect:4/3,sourceAspect:4/3});
-  let lastDepth=null,lastT=null;
+  let lastDepth=null,lastU=null,lastV=null,lastT=null;
   const impacts=drive(tracking,punch({from:.72,to:.32,out:.14,hold:.06,back:.20}),{
     duration:1.0,vanishBelow:.52,
     blob:(t,state)=>{
@@ -110,8 +110,10 @@ test('the motion stream carries a blur-dead punch to a confirmed apex through th
       const u=.5+state.lateral[0]/(2*state.depth*camera.kx);
       const v=.5-state.lateral[1]/(2*state.depth*camera.ky);
       const expand=lastDepth!==null&&t>lastT?Math.log(lastDepth/state.depth)/(t-lastT):0;
-      lastDepth=state.depth;lastT=t;
-      return [{u,v,mass:.4,spread:.1,expand}];
+      const du=lastU!==null&&t>lastT?(u-lastU)/(t-lastT):0;
+      const dv=lastV!==null&&t>lastT?(v-lastV)/(t-lastT):0;
+      lastDepth=state.depth;lastU=u;lastV=v;lastT=t;
+      return [{u,v,mass:.4,spread:.1,expand,du,dv}];
     },
   });
   assert.equal(impacts.length,1,`the blob stream must land the punch exactly once (got ${impacts.length})`);
@@ -166,9 +168,10 @@ test('a mirrored feed, declared mirrored, names the hand that threw the hook and
   // face. Declaring the interpretation un-flips everything at the shell boundary.
   const right=rig();right.setMirrored(true);
   // Physical right hook: from the puncher's right, sweeping across. The mirrored image of a
-  // right hand has left-hand geometry, which MediaPipe labels 'Right' under its selfie
-  // convention — the label mirrors along with everything else.
-  const rightImpacts=drive(right,null,{mirror:true,label:'Right',duration:.85,
+  // right hand has left-hand geometry, which this landmarker (it names what it sees — the
+  // physical-looking hand, no selfie assumption) labels 'Left'; the label mirrors along with
+  // everything else, and the shell's declared-mirrored flip restores it.
+  const rightImpacts=drive(right,null,{mirror:true,label:'Left',duration:.85,
     path:arc({lateral:[-.34,.02],depth:.36},{lateral:[-.06,.02],depth:.30})});
   assert.equal(rightImpacts.length,1);
   assert.equal(rightImpacts[0].mode,'hook');
@@ -176,7 +179,7 @@ test('a mirrored feed, declared mirrored, names the hand that threw the hook and
   assert.ok(rightImpacts[0].point[0]>.05,`lands screen-right, the target's left cheek (got ${rightImpacts[0].point[0].toFixed(3)})`);
   assert.ok(rightImpacts[0].direction[0]<-.5);
   const left=rig();left.setMirrored(true);
-  const leftImpacts=drive(left,null,{mirror:true,label:'Left',duration:.85,
+  const leftImpacts=drive(left,null,{mirror:true,label:'Right',duration:.85,
     path:arc({lateral:[.34,.02],depth:.36},{lateral:[.06,.02],depth:.30})});
   assert.equal(leftImpacts.length,1);
   assert.equal(leftImpacts[0].hand,'left');
@@ -228,7 +231,9 @@ test('a hook landing on the side of the head registers, though its depth barely 
 test('an uppercut arriving from below registers',()=>{
   const tracking=rig();
   const from={lateral:[.04,-.34],depth:.40},to={lateral:[.04,-.09],depth:.26};
-  const impacts=drive(tracking,null,{path:arc(from,to),duration:.85});
+  // pitch π/4: an uppercut's knuckles angle UP at contact. Face-on knuckles (the FACING default)
+  // are a straight punch's signature and correctly veto the uppercut classification.
+  const impacts=drive(tracking,null,{path:arc(from,to),duration:.85,pitch:Math.PI/6});
   assert.equal(impacts.length,1,'rising punches close on range too');
   assert.ok(impacts[0].point[1]<-.02,`and land low on the head (y ${impacts[0].point[1].toFixed(3)})`);
   assert.equal(impacts[0].mode,'uppercut');
@@ -256,7 +261,7 @@ function zoneOf(impact,radii=[.15,.14,.09]){
 test('an uppercut lands on the chin, not the middle of the face',()=>{
   const tracking=rig();
   const from={lateral:[.03,-.34],depth:.40},to={lateral:[.03,-.06],depth:.24};
-  const impacts=drive(tracking,null,{path:arc(from,to),duration:.85});
+  const impacts=drive(tracking,null,{path:arc(from,to),duration:.85,pitch:Math.PI/6});
   assert.equal(impacts.length,1);
   const impact=impacts[0];
   assert.equal(zoneOf(impact),'chin',`landed on the ${zoneOf(impact)} at [${impact.point.map(v=>v.toFixed(3))}]`);
@@ -274,6 +279,63 @@ test('a hook lands on the cheek, not the middle of the face',()=>{
   assert.match(zoneOf(impact),/cheek/,`landed on the ${zoneOf(impact)} at [${impact.point.map(v=>v.toFixed(3))}]`);
   assert.ok(Math.abs(impact.direction[0])>.75,`and drives across (dx ${impact.direction[0].toFixed(2)})`);
   assert.ok(Math.abs(impact.point[0])>Math.abs(impact.apexPoint[0]),'reported further out than where the fist stopped');
+});
+
+test('jab and uppercut separate on where the FIST POINTS, measured in the image',()=>{
+  // The user-visible fact: a jab arrives with its knuckles square at the camera, an uppercut
+  // with them pointing up. The wrist->knuckle axis therefore FORESHORTENS to nearly nothing for
+  // a jab and stands tall up the frame for an uppercut — and both readings are pure image
+  // geometry. The 3D knuckle normal could not do this job: a jab's axis points along the view
+  // axis, so it lives in the depth component, and MediaPipe's depth compression inflated the
+  // small honest vertical until jabs read as uppercuts (and truncated uppercuts read as jabs).
+  // Measured on real synthetic landmark geometry: a fist aimed at the camera reads ~0.16
+  // fist-widths, one tilted 30° up ~0.22, a genuine uppercut 0.4-0.9.
+  for(const [pitch,label] of [[FACING,'knuckles square at the camera'],[Math.PI/3,'fist tilted 30° up']]){
+    const tracking=rig();
+    const impacts=drive(tracking,punch({from:.70,to:.30}),{duration:.85,pitch});
+    assert.equal(impacts.length,1,`${label}: the jab must register`);
+    assert.equal(impacts[0].mode,'jab',
+      `${label}: still a jab (got ${impacts[0].mode} via ${impacts[0].why}, axis ${JSON.stringify(impacts[0].handAxis)})`);
+  }
+  // And the same trajectory thrown with the knuckles up IS an uppercut — orientation alone
+  // flips the verdict, which is what lets a truncated uppercut register as one.
+  const upright=rig();
+  const rising=drive(upright,null,{duration:.85,pitch:Math.PI/6,
+    path:arc({lateral:[.03,-.34],depth:.40},{lateral:[.03,-.06],depth:.24})});
+  assert.equal(rising.length,1);
+  assert.equal(rising[0].mode,'uppercut',`knuckles up is an uppercut (via ${rising[0].why})`);
+  assert.ok(rising[0].handAxis.dv>.4,`and the fist measurably points up (${rising[0].handAxis.dv.toFixed(2)} fist-widths)`);
+});
+
+test('fists idling in guard never log an uppercut — a guard fist is vertical but EDGE-ON',()=>{
+  // The live symptom: normal guard idling occasionally fired "uppercut". A guard fist shares an
+  // uppercut's vertical knuckle axis, but shows the camera its EDGE (back of the fist to the
+  // side), where an uppercut shows the BACK. The facing measure separates them (~.1 vs 1.0),
+  // and no orientation verdict is allowed from an edge-on hand — however briskly the guard bobs.
+  const tracking=rig();
+  const bob=t=>{
+    const phase=(t%1.0)/1.0;
+    let s;
+    if(phase<.15)s=phase/.15;
+    else if(phase<.4)s=1;
+    else if(phase<.55)s=1-(phase-.4)/.15;
+    else s=0;
+    return {lateral:[-.15,-.02],depth:.52-.16*s};
+  };
+  const impacts=drive(tracking,null,{path:bob,duration:3.0,pitch:0,yaw:Math.PI/2});
+  for(const impact of impacts)
+    assert.notEqual(impact.mode,'uppercut',
+      `an edge-on guard bob is never an uppercut (got ${impact.mode} via ${impact.why}, facing ${impact.handAxis?.facing?.toFixed(2)})`);
+});
+
+test('a hook is recognised by its hand shape: back-on fist, knuckles to the side',()=>{
+  const tracking=rig();
+  const from={lateral:[.30,.02],depth:.42},to={lateral:[.06,.02],depth:.30};
+  const impacts=drive(tracking,null,{path:arc(from,to),duration:.85,pitch:0,roll:-Math.PI/2});
+  assert.equal(impacts.length,1);
+  assert.equal(impacts[0].mode,'hook',`(got ${impacts[0].mode} via ${impacts[0].why})`);
+  assert.ok(Math.abs(impacts[0].handAxis.du)>.5&&impacts[0].handAxis.facing>.55,
+    `the side-pointing back-on fist was measured (axis ${JSON.stringify(impacts[0].handAxis)})`);
 });
 
 test('a straight jab still lands on the front of the face',()=>{
@@ -332,6 +394,35 @@ test('both fists up: only the one actually punching fires',()=>{
   }
   assert.equal(impacts.length,1,`the stationary guard hand must not score (got ${impacts.length})`);
   assert.equal(tracking.tracks.size,2,'both hands are tracked separately');
+});
+
+test('lifting the elbows — fists still, hands rotating — is not a punch',()=>{
+  // The live symptom: forearms rotating to horizontal with the fists held in place fired
+  // consecutive jab/hook events. Rotation foreshortens and un-foreshortens the knuckle span, and
+  // when the rigid fit fails, apparent-size depth reads that as a tens-of-centimetres approach
+  // and retreat — a complete phantom punch. Fallback samples are depth-inertial now: a failed
+  // fit contributes the lateral the image measures honestly and manufactures no depth.
+  const tracking=rig();
+  const camera=new PinholeCamera({fovDegrees:60,viewAspect:4/3,sourceAspect:4/3});
+  const random=makeRandom(23),impacts=[];
+  for(let ms=0;ms<=1400;ms+=1000/60){
+    const t=ms/1000;
+    const o=observe({position:[.04,-.02,-.45],rotation:{pitch:FACING},closure:1},camera,random);
+    const failing=t>=.5&&t<.86;
+    if(failing){
+      // the "rotation": apparent span doubles and comes back while the rigid fit is unsolvable
+      const swell=t<.68?1+(t-.5)/.18:2-(t-.68)/.18;
+      const cx=o.landmarks.reduce((s,p)=>s+p.x,0)/21,cy=o.landmarks.reduce((s,p)=>s+p.y,0)/21;
+      for(const p of o.landmarks){p.x=cx+(p.x-cx)*swell;p.y=cy+(p.y-cy)*swell;}
+      for(const p of o.worldLandmarks)p.z=NaN;   // unusable world: the rigid fit fails
+    }
+    tracking.results={landmarks:[o.landmarks],worldLandmarks:[o.worldLandmarks],
+      handedness:[[{categoryName:'Left',score:.9}]],motion:{energy:.03,x:.5,y:.5,peak:.3,blobs:[]},timestamp:ms};
+    const contact=tracking.tick(ms+10);
+    if(contact)impacts.push(contact);
+  }
+  assert.ok(tracking.probe.fitFail>5,'the degraded-fit path was actually exercised');
+  assert.equal(impacts.length,0,`a rotating stationary fist must not punch (got ${impacts.length}: ${impacts.map(i=>i.mode).join(', ')})`);
 });
 
 // One fist can become two identities — a blurred frame, a big jump, a momentary loss. In the old
