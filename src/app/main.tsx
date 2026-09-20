@@ -5,12 +5,6 @@ import { GridCard } from '@/components/ui/grid-card';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
 import '@/design/index.css';
 
-type PunchingFace = {
-  __punchingFace?: {
-    state?: { calibrated?: boolean; cameraActive?: boolean };
-  };
-};
-
 function AppShell() {
   const headerSlot = useRef<HTMLDivElement>(null);
   const leftSlot = useRef<HTMLDivElement>(null);
@@ -34,7 +28,9 @@ function AppShell() {
       const dialogs = stage.querySelectorAll<HTMLDialogElement>(':scope > dialog');
 
       const left = main?.querySelector<HTMLElement>(':scope > aside.left');
-      const stageShell = main?.querySelector<HTMLElement>(':scope > section.stage-shell');
+      const stageShell = main?.querySelector<HTMLElement>(
+        ':scope > section.stage-shell',
+      );
       const right = main?.querySelector<HTMLElement>(':scope > aside.right');
 
       if (header && headerSlot.current) headerSlot.current.appendChild(header);
@@ -56,6 +52,11 @@ function AppShell() {
         webcam.parentElement?.insertBefore(wrap, webcam);
         wrap.appendChild(webcam);
         wrap.appendChild(slapHand);
+        const connect = document.createElement('button');
+        connect.className = 'demo-camera-connect';
+        connect.textContent = 'Connect camera';
+        connect.onclick = () => document.getElementById('camera')?.click();
+        wrap.appendChild(connect);
       }
       if (slapHud) slapHud.style.display = 'none';
 
@@ -65,7 +66,7 @@ function AppShell() {
       bakeBeatMeButton();
       addHeaderLogo();
       hideRoomSection(left);
-      autoCalibrateOnCameraConnect(left);
+      prepareCameraSection(left);
       // The loader and tracking loop still update these status elements.
       const stageTop = stageShell?.querySelector<HTMLElement>('.stage-top');
       if (stageTop) stageTop.style.display = 'none';
@@ -153,7 +154,9 @@ function moveKeyHintToLeftPanel(
 
 function wrapAdvancedSection(rightPanel: HTMLElement | null) {
   if (!rightPanel) return;
-  const sections = rightPanel.querySelectorAll<HTMLElement>(':scope > section.panel-section');
+  const sections = rightPanel.querySelectorAll<HTMLElement>(
+    ':scope > section.panel-section',
+  );
   for (const section of sections) {
     const heading = section.querySelector('h2');
     if (!heading || heading.textContent?.trim() !== 'Surface & rig') continue;
@@ -232,7 +235,9 @@ function bakeBeatMeButton() {
   meshyPanel.querySelectorAll<HTMLElement>('.meshy-check').forEach((el) => {
     el.style.display = 'none';
   });
-  const compress = document.getElementById('compress-toggle') as HTMLInputElement | null;
+  const compress = document.getElementById(
+    'compress-toggle',
+  ) as HTMLInputElement | null;
   if (compress) compress.checked = true;
   const btn = document.getElementById('beat-yourself') as HTMLButtonElement | null;
   if (btn) {
@@ -260,7 +265,8 @@ function swapViewSwitch(stageShell: HTMLElement | null | undefined) {
   const handlers = new Map<string, (() => void) | null>(
     buttons.map((b) => [b.id, b.onclick ? (b.onclick.bind(b) as () => void) : null]),
   );
-  const defaultTab = buttons.find((b) => b.classList.contains('active'))?.id ?? tabs[0].id;
+  const defaultTab =
+    buttons.find((b) => b.classList.contains('active'))?.id ?? tabs[0].id;
 
   // Keep the original IDs and handlers alive for installMesh() and setView().
   const originalControls = document.createElement('div');
@@ -278,38 +284,12 @@ function swapViewSwitch(stageShell: HTMLElement | null | undefined) {
   );
 }
 
-// After the user connects the webcam, wait for cameraActive to flip true,
-// then trigger calibration once and hide the now-redundant Calibrate +
-// Scan my arms buttons so the left sidebar stays scroll-free.
-function autoCalibrateOnCameraConnect(leftPanel: HTMLElement | null | undefined) {
-  const calibrate = document.getElementById('calibrate') as HTMLButtonElement | null;
-  const scanArms = document.getElementById('scan-arms') as HTMLElement | null;
-  const armAppearance = document.getElementById('arm-appearance');
-  if (armAppearance) armAppearance.style.display = 'none';
-  if (scanArms) scanArms.style.display = 'none';
-
-  if (!calibrate) return;
-  let done = false;
-  const id = window.setInterval(() => {
-    const win = window as unknown as PunchingFace;
-    const state = win.__punchingFace?.state;
-    if (!done && state?.cameraActive) {
-      done = true;
-      window.setTimeout(() => calibrate.click(), 250);
-      window.setTimeout(() => {
-        // cameraToggle() still updates this control when disconnecting.
-        calibrate.style.display = 'none';
-        clearInterval(id);
-      }, 750);
-    }
-  }, 250);
-  // Failsafe: stop polling after a minute even if no camera connects.
-  window.setTimeout(() => clearInterval(id), 60_000);
-  // If the sidebar has a solitary muted line under the buttons, drop it.
-  leftPanel?.querySelectorAll('.muted').forEach((el) => {
-    const text = el.textContent?.trim() ?? '';
-    if (/awaiting capture|calibrat/i.test(text)) (el as HTMLElement).style.display = 'none';
-  });
+// Onboarding owns calibration; the dashboard keeps its manual recalibrate control.
+function prepareCameraSection(leftPanel: HTMLElement | null | undefined) {
+  for (const id of ['scan-arms', 'arm-appearance']) {
+    const element = document.getElementById(id);
+    if (element) element.style.display = 'none';
+  }
 }
 
 // Immersive fullscreen keyboard support:

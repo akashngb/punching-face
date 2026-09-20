@@ -12,7 +12,9 @@ import { enableArenaOmniIfFlagged } from '../scenarios/arena/engine-wire.js';
 
 const API = 'http://127.0.0.1:5176';
 let config = null,
-  seen = 0;
+  seen = 0,
+  demoFace = null,
+  demoRequested = !!window.__punchingFaceDemoStarted;
 const stats = new RoundStats();
 const remember = (key, value) => {
   try {
@@ -58,6 +60,17 @@ function show(tab) {
 for (const b of dock.querySelectorAll('[data-tab]'))
   b.onclick = () => show(b.dataset.tab);
 
+function startDemoFace() {
+  demoRequested = true;
+  dock.classList.remove('collapsed');
+  show('coach');
+  // Keep this call synchronous with Begin punching so WebAudio can use its gesture.
+  void demoFace?.startFace();
+}
+
+window.addEventListener('punching-face-demo-start', startDemoFace);
+if (demoRequested) startDemoFace();
+
 function offline() {
   dock.querySelector('[data-panel=coach]').innerHTML =
     `<div class="sd-status">Sponsor services are not running, so the face and the arena are off. The rest of PUNCHING FACE is unaffected.</div>
@@ -98,6 +111,7 @@ async function start() {
       pillLabel.textContent = name + ' · Arena';
     },
   });
+  demoFace = coach;
   // One place records a landed punch, whoever threw it: stats first, then the face and the room hear about it.
   const record = (contact, who) => {
     seen = contact.time;
@@ -138,6 +152,8 @@ async function start() {
     dots.coach.className = 'sd-dot' + (config.omni.configured ? ' on' : ' warn');
   }, 1000);
   show(remember('tab') || 'coach');
+  // Config may arrive after the user has already entered the demo.
+  if (demoRequested || window.__punchingFaceDemoStarted) startDemoFace();
   // Rejoin a session that a dev-server reload interrupted, once the head is loaded and the canvas has a size.
   const ready = setInterval(() => {
     const canvas = document.querySelector('#stage canvas');

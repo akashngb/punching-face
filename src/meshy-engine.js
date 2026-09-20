@@ -2,6 +2,7 @@
 // Meshy's cloud multi-image-to-3D (server side: meshy_backend.py). One scan can hold a model from each, so
 // switching engines on a finished scan compares the two; it never rebuilds or spends credits on its own.
 import './meshy-engine.css';
+import { acknowledgeScanJob, trackScanJob } from './scan-jobs.js';
 
 const $ = (id) => document.getElementById(id);
 const ENGINE_KEY = 'punching-face-engine';
@@ -50,28 +51,44 @@ const store = (storage, key, value) => {
 // facial anchors. Handing the Meshy model to that same input keeps one import path instead of two.
 async function importGLB(bytes) {
   const input = $('face-file'),
-    overlay = $('busy'),
     file = new File([bytes], MODEL_NAME + '.glb', { type: 'model/gltf-binary' });
+  if (!input) throw new Error('The model importer is not ready yet.');
   const transfer = new DataTransfer();
   transfer.items.add(file);
-  input.files = transfer.files;
-  input.dispatchEvent(new Event('change'));
-  if (overlay?.classList.contains('active'))
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        observer.disconnect();
-        reject(new Error('Loading the Meshy model timed out.'));
-      }, 60000);
-      const observer = new MutationObserver(() => {
-        if (overlay.classList.contains('active')) return;
-        clearTimeout(timer);
-        observer.disconnect();
-        resolve();
-      });
-      observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
-    });
-  if ($('model-name').textContent !== file.name)
-    throw new Error('The Meshy model could not be loaded into the scene.');
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      window.removeEventListener('punching-face-model-loaded', loaded);
+      window.removeEventListener('punching-face-model-error', failed);
+    };
+    const loaded = (event) => {
+      if (event.detail?.name !== file.name) return;
+      cleanup();
+      resolve();
+    };
+    const failed = (event) => {
+      cleanup();
+      reject(
+        new Error(
+          event.detail || 'The Meshy model could not be loaded into the scene.',
+        ),
+      );
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Loading the Meshy model timed out.'));
+    }, 60000);
+    // Register first: even a cached or rejected import can finish immediately.
+    window.addEventListener('punching-face-model-loaded', loaded);
+    window.addEventListener('punching-face-model-error', failed);
+    try {
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change'));
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
   $('model-name').textContent = MODEL_NAME;
   const scene = $('scene-name').firstChild;
   if (scene) scene.textContent = MODEL_NAME;
@@ -93,28 +110,11 @@ async function fetchModel(id) {
   return response.arrayBuffer();
 }
 
-// A reload (Vite reloads on every save) would otherwise fall back to the local model. Wait until the scene's
-// own recovery has finished, then put the Meshy head back.
-async function restoreActive() {
-  const id = stored(sessionStorage, ACTIVE_KEY);
-  if (!id) return;
-  try {
-    await new Promise((resolve) => {
-      const started = performance.now();
-      const check = () =>
-        (window.__labReady && !$('busy')?.classList.contains('active')) ||
-        performance.now() - started > 60000
-          ? resolve()
-          : setTimeout(check, 250);
-      check();
-    });
-    if (stored(sessionStorage, ACTIVE_KEY) !== id) return;
-    await importGLB(await fetchModel(id));
-    watchActive();
-  } catch (e) {
-    store(sessionStorage, ACTIVE_KEY, null);
-    console.info('Meshy head not restored:', e.message);
-  }
+// Saved heads are chosen through the library; completion and page load never replace the scene.
+export async function loadMeshyModel(id) {
+  await importGLB(await fetchModel(id));
+  store(sessionStorage, ACTIVE_KEY, id);
+  watchActive();
 }
 
 let nameObserver;
@@ -139,7 +139,6 @@ export class EngineChoice {
     this.engine = stored(localStorage, ENGINE_KEY) === 'meshy' ? 'meshy' : 'local';
     this.status = null;
     this.job = null;
-    this.awaiting = null;
     $('face-cloud-review')
       .closest('label')
       .insertAdjacentHTML(
@@ -196,7 +195,6 @@ export class EngineChoice {
     $('engine-meshy-save').onclick = () => this.saveKey();
     $('engine-meshy-test').onclick = () => this.refresh(true);
     this.render();
-    restoreActive();
   }
 
   get meshy() {
@@ -211,7 +209,6 @@ export class EngineChoice {
     this.engine = engine === 'meshy' ? 'meshy' : 'local';
     store(localStorage, ENGINE_KEY, this.engine);
     this.job = null;
-    this.awaiting = null;
     this.render();
     const c = this.capture;
     c.ready = false;
@@ -308,29 +305,44 @@ export class EngineChoice {
 
   async build() {
     const c = this.capture;
-    await c.stop();
-    if (
-      c.ready &&
-      !confirm(
-        'Rebuild with Meshy? This spends credits again. The current Meshy head is replaced only when the new one finishes.',
-      )
-    )
-      return;
-    const started = await api('meshy-train', { id: c.id, rebuild: c.ready });
-    this.awaiting = started.reused ? null : c.id;
-    c.jobRunning = started.status === 'running';
-    c.autoLoaded = null;
+    if (c.submitting) return;
+    c.submitting = true;
     c.controls();
-    await this.poll(c.id);
+    try {
+      await c.stop();
+      const id = c.id;
+      if (
+        c.ready &&
+        !confirm(
+          'Rebuild with Meshy? This spends credits again. The current Meshy head is replaced only when the new one finishes.',
+        )
+      )
+        return;
+      const started = await api('meshy-train', { id, rebuild: c.ready });
+      trackScanJob({ id, engine: 'meshy' });
+      if (id !== c.id || !this.meshy) return;
+      c.jobRunning = started.status === 'running';
+      c.autoLoaded = null;
+      await this.poll(id);
+    } finally {
+      c.submitting = false;
+      c.controls();
+    }
   }
 
   async poll(id) {
     const c = this.capture;
     clearTimeout(c.pollTimer);
+    const current = () =>
+      id === c.id && this.meshy && !c.closing && $('face-scan-dialog').open;
+    if (!id || !current()) return;
     const job = await api('meshy-job?id=' + id);
-    if (id !== c.id || !this.meshy) return;
+    if (!current()) return;
     this.job = job;
+    const wasRunning = c.jobRunning;
     c.jobRunning = job.status === 'running';
+    if (c.jobRunning && !wasRunning)
+      trackScanJob({ id, engine: 'meshy', resume: true });
     c.ready = job.model === true;
     c.showTiming(null, null);
     this.showViews(id, job);
@@ -344,19 +356,17 @@ export class EngineChoice {
           : job.message;
     this.render();
     c.controls();
-    if (c.jobRunning)
-      c.pollTimer = setTimeout(
-        () =>
-          c.poll(id).catch((e) => {
-            $('face-job-state').textContent = e.message;
-            c.pollTimer = setTimeout(() => c.poll(id).catch((e) => c.fail(e)), 4000);
-          }),
-        2000,
-      );
-    else if (this.awaiting === id) {
-      this.awaiting = null;
-      if (job.status === 'complete' && c.ready) await c.load();
-    }
+    const pollAgain = async () => {
+      if (!current()) return;
+      try {
+        await this.poll(id);
+      } catch (error) {
+        if (!current()) return;
+        $('face-job-state').textContent = error.message;
+        c.pollTimer = setTimeout(pollAgain, 4000);
+      }
+    };
+    if (c.jobRunning) c.pollTimer = setTimeout(pollAgain, 2000);
   }
 
   async load() {
@@ -365,10 +375,9 @@ export class EngineChoice {
     c.loading = true;
     c.controls();
     try {
-      await importGLB(await fetchModel(id));
+      await loadMeshyModel(id);
+      acknowledgeScanJob({ id, engine: 'meshy' });
       c.autoLoaded = id;
-      store(sessionStorage, ACTIVE_KEY, id);
-      watchActive();
       $('face-job-state').textContent =
         'Meshy head loaded into the interaction scene. Close this panel to inspect it and try a hook.';
     } finally {

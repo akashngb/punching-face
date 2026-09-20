@@ -1,6 +1,7 @@
 import { timingRows } from './pipeline-timing.js';
 import { captureCoverage } from './face-quality.js';
 import { EngineChoice } from './meshy-engine.js';
+import { acknowledgeScanJob, forgetScanJobs, trackScanJob } from './scan-jobs.js';
 import qualityURL from './face-quality.js?url';
 const $ = (id) => document.getElementById(id);
 const asDataURL = (blob) =>
@@ -38,6 +39,7 @@ export class FaceCapture {
     this.samples = [];
     this.running = false;
     this.saving = false;
+    this.closing = false;
     this.id = null;
     document.body.insertAdjacentHTML(
       'beforeend',
@@ -135,6 +137,9 @@ export class FaceCapture {
           Create 3D face
         </button>
         <p class="note" id="face-job-state" role="status">No reconstruction started.</p>
+        <button id="face-scan-background" class="primary full" hidden>
+          Use another head while this builds
+        </button>
         <div class="row">
           <button id="face-scan-load" disabled>Load face</button
           ><button id="face-scan-delete" disabled>Delete scan</button>
@@ -194,10 +199,18 @@ export class FaceCapture {
     this.engines = new EngineChoice(this);
     $('face-scan-record').onclick = () => this.start().catch((e) => this.fail(e));
     $('face-scan-stop').onclick = () => this.stop().catch((e) => this.fail(e));
-    $('face-scan-close').onclick = () => this.close();
+    $('face-scan-close').onclick = () => this.close().catch((e) => this.fail(e));
+    $('face-scan-background').onclick = async () => {
+      try {
+        await this.close();
+        window.dispatchEvent(new CustomEvent('punching-face-scan-background'));
+      } catch (error) {
+        this.fail(error);
+      }
+    };
     $('face-scan-dialog').addEventListener('cancel', (e) => {
       e.preventDefault();
-      this.close();
+      this.close().catch((error) => this.fail(error));
     });
     $('face-scan-build').onclick = () => this.build().catch((e) => this.fail(e));
     $('face-scan-load').onclick = () => this.load().catch((e) => this.fail(e));
@@ -265,6 +278,7 @@ export class FaceCapture {
   }
 
   async open() {
+    if (this.closing) return;
     $('face-scan-dialog').showModal();
     await Promise.all([this.configuration(), this.refresh(), this.engines.refresh()]);
     if (this.id && !this.running) await this.poll();
@@ -295,7 +309,13 @@ export class FaceCapture {
   }
 
   controls() {
-    const busy = this.running || this.saving || this.loading || this.deleting;
+    const busy =
+      this.running ||
+      this.saving ||
+      this.loading ||
+      this.submitting ||
+      this.deleting ||
+      this.closing;
     for (const id of [
       'face-scan-record',
       'face-scan-video-import',
@@ -307,7 +327,9 @@ export class FaceCapture {
     ])
       $(id).disabled = !!busy;
     $('face-scan-stop').disabled = !this.running;
-    $('face-scan-delete').disabled = !this.id || !!this.saving || !!this.deleting;
+    $('face-scan-delete').disabled = !this.id || !!busy || !!this.jobRunning;
+    $('face-scan-background').hidden = !this.jobRunning;
+    $('face-scan-background').disabled = !!busy;
     $('face-scan-build').disabled =
       !!busy || !this.id || this.count < this.engines.minimumViews || this.jobRunning;
     $('face-scan-load').disabled = !!busy || !this.ready;
@@ -490,9 +512,19 @@ export class FaceCapture {
   }
 
   async close() {
-    $('face-source-video').pause();
-    await this.stop();
-    $('face-scan-dialog').close();
+    if (this.closing) return;
+    this.closing = true;
+    clearTimeout(this.pollTimer);
+    this.controls();
+    try {
+      $('face-source-video').pause();
+      await this.stop();
+    } finally {
+      clearTimeout(this.pollTimer);
+      $('face-scan-dialog').close();
+      this.closing = false;
+      this.controls();
+    }
   }
 
   fail(e) {
@@ -742,6 +774,7 @@ export class FaceCapture {
 
   async select(id) {
     if (this.running || this.saving) return;
+    clearTimeout(this.pollTimer);
     this.id = id || null;
     $('face-scan-saved').value = id || '';
     this.ready = false;
@@ -761,25 +794,44 @@ export class FaceCapture {
 
   async build() {
     if (this.engines.meshy) return this.engines.build();
-    await this.stop();
-    const result = await api('face-train', {
-      id: this.id,
-      cloudReview: $('face-cloud-review').checked,
-    });
-    this.jobRunning = true;
-    this.ready = false;
-    this.autoLoaded = null;
+    if (this.submitting) return;
+    this.submitting = true;
     this.controls();
-    await this.poll(result.id);
+    try {
+      await this.stop();
+      const id = this.id;
+      const result = await api('face-train', {
+        id,
+        cloudReview: $('face-cloud-review').checked,
+      });
+      trackScanJob({ id: result.id, engine: 'local' });
+      if (id !== this.id || this.engines.meshy) return;
+      this.jobRunning = true;
+      this.ready = false;
+      this.autoLoaded = null;
+      await this.poll(result.id);
+    } finally {
+      this.submitting = false;
+      this.controls();
+    }
   }
 
   async poll(id = this.id) {
     clearTimeout(this.pollTimer);
-    if (!id) return;
+    if (!id || this.closing || !$('face-scan-dialog').open) return;
     if (this.engines.meshy) return this.engines.poll(id);
+    const current = () =>
+      id === this.id &&
+      !this.engines.meshy &&
+      !this.closing &&
+      $('face-scan-dialog').open;
+    if (!current()) return;
     const state = await api('face-status?id=' + id);
-    if (id !== this.id) return;
+    if (!current()) return;
+    const wasRunning = this.jobRunning;
     this.jobRunning = state.status === 'running';
+    if (this.jobRunning && !wasRunning)
+      trackScanJob({ id, engine: 'local', resume: true });
     this.ready = state.photoModel === true;
     this.showTiming(state.source, state.timing);
     const orbit = state.evidence?.orbitCoverage;
@@ -798,21 +850,17 @@ export class FaceCapture {
         ? ' Rear image API unavailable; using local hair-material continuation.'
         : '');
     this.controls();
-    if (this.jobRunning)
-      this.pollTimer = setTimeout(
-        () =>
-          this.poll(id).catch((e) => {
-            $('face-job-state').textContent = e.message;
-            this.pollTimer = setTimeout(
-              () => this.poll(id).catch((e) => this.fail(e)),
-              4000,
-            );
-          }),
-        2000,
-      );
-    else if (state.status === 'complete' && this.ready && this.autoLoaded !== id) {
-      await this.load();
-    }
+    const pollAgain = async () => {
+      if (!current()) return;
+      try {
+        await this.poll(id);
+      } catch (error) {
+        if (!current()) return;
+        $('face-job-state').textContent = error.message;
+        this.pollTimer = setTimeout(pollAgain, 4000);
+      }
+    };
+    if (this.jobRunning) this.pollTimer = setTimeout(pollAgain, 2000);
   }
 
   async load() {
@@ -823,13 +871,14 @@ export class FaceCapture {
     const started = performance.now();
     try {
       await this.onReady(id);
+      acknowledgeScanJob({ id, engine: 'local' });
+      this.autoLoaded = id;
       const result = await api('face-timing', {
         id,
         kind: 'load',
         seconds: (performance.now() - started) / 1000,
       });
       this.showTiming(result.source, result.timing);
-      this.autoLoaded = id;
       $('face-job-state').textContent =
         'Face loaded into the interaction scene. Close this panel to inspect the surface and try a hook.';
     } finally {
@@ -839,14 +888,24 @@ export class FaceCapture {
   }
 
   async remove() {
-    if (this.deleting) return;
+    if (
+      this.deleting ||
+      this.running ||
+      this.saving ||
+      this.loading ||
+      this.submitting ||
+      this.closing ||
+      this.jobRunning
+    )
+      return;
     this.deleting = true;
     this.controls();
     try {
       await this.stop();
       const id = this.id;
-      if (!id) return;
+      if (!id || this.jobRunning) return;
       await api('face-delete', { id });
+      forgetScanJobs(id);
       clearTimeout(this.pollTimer);
       await this.onDelete(id);
       this.id = null;

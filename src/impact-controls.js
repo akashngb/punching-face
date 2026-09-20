@@ -7,7 +7,6 @@ export function installImpactControls({
   getMesh,
   headPivot,
   contact,
-  setView,
   release,
   toast,
   rigMarkers,
@@ -102,14 +101,24 @@ export function installImpactControls({
     overlaySource = null,
     markerBinding = [];
   function setMode(mode) {
-    getDynamics()?.setHeadMode(mode);
+    const dynamics = getDynamics();
+    const leavingClay = dynamics?.headMode === 'clay' && mode === 'live';
+    dynamics?.setHeadMode(mode);
+    if (leavingClay) {
+      // Restore the undeformed base now, including Newton offsets. A new
+      // impact should never be required to release retained clay damage.
+      dynamics.resetMotion(true);
+      dynamics.step(0);
+    }
     $('head-mode').value = mode;
     $('head-mode-note').textContent =
       mode === 'clay'
         ? 'Dents accumulate and stay until Reset head.'
         : 'Recovers after impact. Above 0.90, bone regions retain damage until Reset head.';
-    setView(mode === 'clay' ? 'clay' : 'mesh');
     release();
+    window.dispatchEvent(
+      new CustomEvent('punching-face-mode-change', { detail: { mode } }),
+    );
   }
   $('head-mode').onchange = () => setMode($('head-mode').value);
   for (const [id, suffix] of [
@@ -243,7 +252,6 @@ export function installImpactControls({
     markerBinding = rigMarkers.children.map(
       (marker, i) => t.nearest(d.impactRig.anchors[ids[i]] ?? [0, 0, 0]).index,
     );
-    if (d.headMode === 'clay') setView('clay');
   }
   $('tissue-map').onchange = () => {
     if (overlay) overlay.visible = $('tissue-map').checked;

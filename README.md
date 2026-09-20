@@ -8,6 +8,8 @@ The OMNI engine (Realtime WebSocket → Qwen3.5-Omni) is described under [OMNI i
 
 Run `npm run dev`, then open http://127.0.0.1:5173/. Vite runs on 5173, the capture/reconstruction API on 5174, the Newton CPU service on 5175, the OMNI relay on 5177. All bind to loopback. The Cornerman/Arena coach panel additionally needs `npm run sponsors` (5176) in a second terminal; without it the panel reports that sponsor services are off and the rest of the app is unaffected.
 
+Automatic browser updates are off by default so file edits cannot reset a live demo or camera session. Refresh manually to load code changes. For development with automatic updates, launch with `CONTACT_HMR=1 npm run dev` (PowerShell: `$env:CONTACT_HMR='1'; npm run dev`). Generated assets, documentation, scripts, tests and build outputs stay excluded from automatic reloads.
+
 ## Code formatting
 
 JavaScript, CSS and HTML use Prettier; Python uses Black. Both wrap code at 88

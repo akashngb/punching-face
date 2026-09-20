@@ -1,5 +1,5 @@
 // The OMNI Live voice in the room. It sees (webcam keyframes), hears (your voice, hands-free), and
-// speaks (streamed audio you can interrupt). Two modes, picked in the panel and sent with every turn:
+// speaks (streamed audio, with optional interruptions). Two modes, picked in the panel and sent with every turn:
 // `face` — the head you are punching, talking back, which is the default; `coach` — a cornerman
 // calling corrections. Only the system prompt and the labels change; the transport is identical.
 //
@@ -28,6 +28,7 @@ const FRAME_MS = 20,
   QUIET_AFTER_TURN_MS = 7000,
   PUNCHES_PER_CUE = 8;
 const MODE_KEY = 'punching-face-sponsors-mode';
+const INTERACTION_KEY = 'punching-face-sponsors-voice-interaction';
 const MODES = {
   face: {
     label: 'Face',
@@ -35,11 +36,11 @@ const MODES = {
     start: 'Wake the face',
     stop: 'Shut it up',
     speaker: 'Face: ',
-    ask: '…or type something to say to it',
+    ask: 'Say something',
     see: 'Let it see me',
-    talk: 'Let it talk back between punches',
-    idle: 'Listening. Say something to it, or just hit it.',
-    off: 'The face is off. Nothing is being sent.',
+    talk: 'React to punches',
+    idle: 'Listening.',
+    off: 'The face is off.',
   },
   coach: {
     label: 'Coach',
@@ -47,11 +48,11 @@ const MODES = {
     start: 'Start coach',
     stop: 'Stop coach',
     speaker: 'Coach: ',
-    ask: '…or type a question',
+    ask: 'Ask a question',
     see: 'Let the coach see me',
-    talk: 'Speak up on combos and personal bests',
-    idle: 'Listening. Ask “how is my guard?” or throw a combo.',
-    off: 'Coach is off. Nothing is being sent.',
+    talk: 'React to combos',
+    idle: 'Listening.',
+    off: 'Coach is off.',
   },
 };
 
@@ -60,13 +61,13 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     <div class="sd-row" style="margin-top:0"><select data-k="mode" aria-label="Who is talking"><option value="face">Trash talk — the face</option><option value="coach">Coach — a cornerman</option></select></div>
     <div class="sd-row"><button class="primary" data-k="toggle" style="flex:1">Wake the face</button><span class="sd-badge" data-k="model"></span></div>
     <div class="sd-meter" data-k="meter"><i></i></div>
-    <div class="sd-status" data-k="status">
-      Hands-free: just talk. Your fists are busy, so there is nothing to press.
-    </div>
+    <div class="sd-status" data-k="status">Ready.</div>
     <div class="sd-log" data-k="log" aria-live="polite"></div>
     <div class="sd-row"><input type="text" data-k="ask" maxlength="300"><button data-k="send">Ask</button></div>
     <label class="sd-check"><input type="checkbox" data-k="vision" checked><span data-k="seelabel">Let it see me </span><span class="sd-badge leaving" data-k="leaving"></span></label>
-    <label class="sd-check"><input type="checkbox" data-k="voice" checked><span>Spoken replies (interrupt by talking)</span></label>
+    <label class="sd-check"><input type="checkbox" data-k="voice" checked><span>Spoken replies</span></label>
+    <label class="sd-status" for="cornerman-interaction">Voice interaction</label>
+    <div class="sd-row"><select id="cornerman-interaction" data-k="interaction"><option value="ambient">Ambient · finish replies</option><option value="interrupt">Interrupt · talk over replies</option></select></div>
     <label class="sd-check"><input type="checkbox" data-k="proactive" checked><span data-k="talklabel"></span></label>
     <details><summary>OMNI key</summary>
       <div class="sd-status">Stored only on this computer (<code>.local/secrets/omni.json</code>, mode 0600). Get one from the Huawei form; the gateway is <span data-k="gateway"></span>.</div>
@@ -84,10 +85,14 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     mouth = null,
     synthetic = null,
     enabled = false,
+    starting = false,
+    session = 0,
     busy = false,
     controller = null,
     nextTime = 0,
     lastTurnAt = -Infinity,
+    ambientReadyAt = 0,
+    ignoringAudio = false,
     sinceTurn = 0,
     keyTimer = null;
   let pending = new Float32Array(0),
@@ -96,6 +101,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     frames = [],
     history = [];
   const playing = new Set(),
+    spokenReplies = new Set(),
     grab = document.createElement('canvas');
   let mode = (() => {
     try {
@@ -106,8 +112,19 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
       return 'face';
     }
   })();
+  let interaction = (() => {
+    try {
+      return localStorage.getItem(INTERACTION_KEY) === 'interrupt'
+        ? 'interrupt'
+        : 'ambient';
+    } catch {
+      return 'ambient';
+    }
+  })();
   const voice = () => MODES[mode];
+  const speaking = () => playing.size > 0 || spokenReplies.size > 0;
   el.mode.value = mode;
+  el.interaction.value = interaction;
 
   const status = (text, error = false) => {
     el.status.textContent = text;
@@ -150,8 +167,9 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
       }
     }
     playing.clear();
+    spokenReplies.clear();
     nextTime = 0;
-    speechSynthesis?.cancel();
+    window.speechSynthesis?.cancel();
     synthetic?.stop();
     if (gate) gate.ratio = 3.2;
   }
@@ -165,12 +183,15 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     source.start(at);
     nextTime = at + buffer.duration;
     playing.add(source);
-    // The mic hears the speakers. Echo cancellation does most of the work; a stiffer gate does the rest,
-    // so the face cannot interrupt itself but a person talking over it still can.
+    // Interrupt mode keeps a stiffer gate against speaker echo. Ambient mode ignores
+    // the microphone throughout playback and its cooldown instead.
     gate.ratio = 8;
     source.onended = () => {
       playing.delete(source);
-      if (!playing.size) gate.ratio = 3.2;
+      if (!speaking()) {
+        if (gate) gate.ratio = 3.2;
+        ambientReadyAt = performance.now() + QUIET_AFTER_TURN_MS;
+      }
     };
   }
 
@@ -280,12 +301,28 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
       // The stand-in has no voice of its own; the browser reads it aloud so the loop can be rehearsed. It is labelled.
       if (mock && said && el.voice.checked && 'speechSynthesis' in window) {
         const utterance = new SpeechSynthesisUtterance(said);
+        spokenReplies.add(utterance);
+        if (gate) gate.ratio = 8;
         // speechSynthesis cannot be routed into WebAudio, so the analyser hears nothing.
         // Drive the stand-in envelope off the utterance instead, as long as it speaks.
-        utterance.onstart = () =>
-          synthetic?.speakFor(Math.max(1.2, said.split(/\s+/).length / 2.6));
-        utterance.onend = utterance.onerror = () => synthetic?.stop();
-        speechSynthesis.speak(utterance);
+        utterance.onstart = () => {
+          if (spokenReplies.has(utterance))
+            synthetic?.speakFor(Math.max(1.2, said.split(/\s+/).length / 2.6));
+        };
+        utterance.onend = utterance.onerror = () => {
+          if (!spokenReplies.delete(utterance)) return;
+          synthetic?.stop();
+          if (!speaking()) {
+            if (gate) gate.ratio = 3.2;
+            ambientReadyAt = performance.now() + QUIET_AFTER_TURN_MS;
+          }
+        };
+        try {
+          speechSynthesis.speak(utterance);
+        } catch (error) {
+          spokenReplies.delete(utterance);
+          throw error;
+        }
       }
       if (said)
         history.push(
@@ -321,10 +358,36 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     } finally {
       busy = false;
       controller = null;
+      ambientReadyAt = performance.now() + QUIET_AFTER_TURN_MS;
     }
   }
 
+  function resetListening() {
+    pending = new Float32Array(0);
+    preroll = [];
+    recording = null;
+    if (gate) {
+      // Preserve the learned room noise, but never keep a partial utterance across modes.
+      gate.speaking = false;
+      gate.loudMs = gate.quietMs = gate.spokenMs = 0;
+      gate.levels = [];
+      gate.ratio = speaking() ? 8 : 3.2;
+    }
+    el.meter.classList.remove('open');
+    el.meter.firstElementChild.style.width = '0';
+  }
+
   function onAudio(chunk) {
+    if (!enabled || !ctx || !gate) return;
+    const now = performance.now();
+    if (interaction === 'ambient' && (busy || speaking() || now < ambientReadyAt)) {
+      if (!ignoringAudio) resetListening();
+      ignoringAudio = true;
+      // Drop speaker echo and room noise, without buffering it or allocating frames.
+      if (busy || speaking()) ambientReadyAt = now + QUIET_AFTER_TURN_MS;
+      return;
+    }
+    ignoringAudio = false;
     const joined = new Float32Array(pending.length + chunk.length);
     joined.set(pending);
     joined.set(chunk, pending.length);
@@ -343,8 +406,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         if (preroll.length > PREROLL_FRAMES) preroll.shift();
       }
       if (event === 'start') {
-        // Barge-in: talking over it cuts it off mid-sentence. Interrupting the face is the point.
-        if (playing.size || busy) {
+        if (interaction === 'interrupt' && (speaking() || busy)) {
           stopSpeaking();
           controller?.abort();
         }
@@ -354,10 +416,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
       } else if (event === 'end' || event === 'discard') {
         const spoken = recording;
         recording = null;
-        if (event === 'discard' || !spoken) {
-          status('Heard a noise, not a question.');
-          continue;
-        }
+        if (event === 'discard' || !spoken) continue;
         const audio = new Float32Array(spoken.reduce((n, f) => n + f.length, 0));
         let offset = 0;
         for (const f of spoken) {
@@ -366,14 +425,33 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         }
         status('Thinking…');
         turn({ audio });
+        if (interaction === 'ambient') {
+          resetListening();
+          return;
+        }
       }
     }
   }
 
   async function start() {
+    if (enabled || starting) {
+      if (ctx?.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+      return;
+    }
+    const currentSession = ++session;
+    starting = true;
     try {
       ctx = new AudioContext();
-      await ctx.resume();
+      const audioContext = ctx;
+      status('Starting audio… If it stays paused, tap ' + voice().start + '.');
+      await audioContext.resume();
+      if (currentSession !== session) return;
       out = ctx.createGain();
       out.connect(ctx.destination);
       streamOut = ctx.createMediaStreamDestination();
@@ -390,26 +468,43 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         },
       };
       gate = new VoiceGate();
+      ambientReadyAt = 0;
+      ignoringAudio = false;
       enabled = true;
       keyTimer = setInterval(keyframe, KEYFRAME_MS);
       paint();
       try {
-        mic = await navigator.mediaDevices.getUserMedia({
+        const microphone = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
           },
         });
-        await ctx.audioWorklet.addModule(
-          URL.createObjectURL(new Blob([TAP], { type: 'application/javascript' })),
+        if (currentSession !== session) {
+          microphone.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        mic = microphone;
+        const workletUrl = URL.createObjectURL(
+          new Blob([TAP], { type: 'application/javascript' }),
         );
-        node = new AudioWorkletNode(ctx, 'punching-face-tap');
+        try {
+          await audioContext.audioWorklet.addModule(workletUrl);
+        } finally {
+          URL.revokeObjectURL(workletUrl);
+        }
+        if (currentSession !== session) return;
+        node = new AudioWorkletNode(audioContext, 'punching-face-tap');
         node.port.onmessage = (e) => onAudio(e.data);
         ctx.createMediaStreamSource(mic).connect(node);
         status('Learning the room noise… then just talk.');
-        setTimeout(() => enabled && !busy && status(voice().idle), 900);
+        setTimeout(
+          () => currentSession === session && enabled && !busy && status(voice().idle),
+          900,
+        );
       } catch (error) {
+        if (currentSession !== session) return;
         status('No microphone (' + error.name + '). Typed questions still work.', true);
         obs.warn('coach.mic_unavailable', { reason: error.name });
       }
@@ -421,15 +516,22 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         new CustomEvent('cornerman:audio', { detail: streamOut.stream }),
       );
     } catch (error) {
+      if (currentSession !== session) return;
+      stop();
       status(error.message, true);
       obs.error(error, { feature: 'coach' });
+    } finally {
+      if (currentSession === session) starting = false;
     }
   }
   function stop() {
+    session++;
+    starting = false;
     enabled = false;
     clearInterval(keyTimer);
     controller?.abort();
     stopSpeaking();
+    if (node) node.port.onmessage = null;
     node?.disconnect();
     mic?.getTracks().forEach((t) => t.stop());
     ctx?.close();
@@ -437,11 +539,10 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     synthetic?.dispose();
     mouth = synthetic = null;
     window.__faceSpeech = null;
-    ctx = mic = node = null;
+    ctx = mic = node = out = streamOut = null;
     frames = [];
-    recording = null;
-    preroll = [];
-    pending = new Float32Array(0);
+    resetListening();
+    ignoringAudio = false;
     el.meter.firstElementChild.style.width = '0';
     paint();
     status(voice().off);
@@ -452,10 +553,26 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
     if (!el.vision.checked) frames = [];
     paint();
   };
+  el.interaction.onchange = () => {
+    interaction = el.interaction.value === 'interrupt' ? 'interrupt' : 'ambient';
+    try {
+      localStorage.setItem(INTERACTION_KEY, interaction);
+    } catch {
+      /* private mode */
+    }
+    resetListening();
+    ignoringAudio = false;
+    status(
+      interaction === 'interrupt'
+        ? 'Interruptions on.'
+        : 'Ambient mode. Replies finish before listening.',
+    );
+  };
   // Switching who is talking cuts the current line off and drops the history: the two personas
   // would otherwise read each other's turns back and answer in the wrong voice.
-  el.mode.onchange = () => {
-    mode = MODES[el.mode.value] ? el.mode.value : 'face';
+  function selectMode(nextMode) {
+    if (mode === nextMode) return;
+    mode = nextMode;
     try {
       localStorage.setItem(MODE_KEY, mode);
     } catch {
@@ -471,7 +588,8 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         ? `Switched to ${voice().label.toLowerCase()}. Carry on.`
         : `${voice().label} is off. Nothing is being sent.`,
     );
-  };
+  }
+  el.mode.onchange = () => selectMode(MODES[el.mode.value] ? el.mode.value : 'face');
   const ask = () => {
     const text = el.ask.value.trim();
     if (!text) return;
@@ -506,6 +624,13 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
   paint();
 
   return {
+    startFace() {
+      selectMode('face');
+      el.voice.checked = true;
+      el.proactive.checked = true;
+      paint();
+      return start();
+    },
     // Called for every landed punch, local or remote. The face answers back at natural beats,
     // never over a person who is speaking, and never back-to-back.
     onPunch(triggers) {
@@ -515,7 +640,7 @@ export function createCornerman({ api, panel, config, stats, refreshConfig, onMo
         !el.proactive.checked ||
         busy ||
         gate?.speaking ||
-        playing.size ||
+        speaking() ||
         performance.now() - lastTurnAt < QUIET_AFTER_TURN_MS
       )
         return;

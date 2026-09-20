@@ -1,3 +1,6 @@
+import { installDemoFlow } from './demo-flow.js';
+import { loadMeshyModel } from './meshy-engine.js';
+import { startMeshyPhoto, loadReadyMeshyPhoto } from './meshy-photo.js';
 import { loadHeadBundle } from './head-bundle.js';
 import { installRealismControls } from './realism-controls.js';
 import { installImpactControls } from './impact-controls.js';
@@ -26,6 +29,8 @@ import './style.css';
 
 const $ = (id) => document.getElementById(id);
 let realismControls = null;
+let demoFlow = null;
+let onboardingFrameTime = 0;
 document.querySelector('#app').innerHTML = /* HTML */ ` <header>
     <div class="brand">
       <svg viewBox="0 0 32 32" fill="none">
@@ -901,6 +906,9 @@ function setView(view) {
   if (wireMesh) wireMesh.visible = $('wire').checked || view === 'wire';
   for (const name of ['mesh', 'clay', 'wire'])
     $('view-' + name).classList.toggle('active', view === name);
+  window.dispatchEvent(
+    new CustomEvent('punching-face-view-change', { detail: { view } }),
+  );
 }
 
 async function reference() {
@@ -913,8 +921,10 @@ async function reference() {
     installMesh(geometryFromData(data), null, data);
     $('model-kind').textContent = 'Public mesh · legacy spring preview';
     $('physics-engine').textContent = 'Reference springs + facial impact rig';
+    return true;
   } catch (e) {
     toast(e.message);
+    return false;
   } finally {
     busy(false);
   }
@@ -928,7 +938,7 @@ function firstPerson() {
 }
 
 function contact(point, direction, speed, source, mode = 'hook', options = {}) {
-  if (!dynamics) return false;
+  if (!dynamics || demoFlow?.isOpen || demoFlow?.canPunch === false) return false;
   impactHeld = false;
   watchPeak = true;
   previousDisplacement = 0;
@@ -958,8 +968,13 @@ function contact(point, direction, speed, source, mode = 'hook', options = {}) {
     affected,
     source,
     magnitude: options.magnitude ?? Math.min(0.9, speed / 1.4),
+    mode,
+    side: options.side ?? (point.x < 0 ? 'left' : 'right'),
     time: performance.now(),
   };
+  window.dispatchEvent(
+    new CustomEvent('punching-face-contact', { detail: window.__lastContact }),
+  );
   return true;
 }
 
@@ -1133,7 +1148,9 @@ function fireSlap(event) {
   const speed = clamp(0.9 + Math.max(0, event.growth) * 2.6, 0.9, 3.4);
   const mode =
     event.type === 'uppercut' ? 'uppercut' : event.type === 'jab' ? 'jab' : 'hook';
-  const landed = contact(finalLocal, localDir, speed, 'webcam', mode);
+  const landed = contact(finalLocal, localDir, speed, 'webcam', mode, {
+    side: event.side,
+  });
   if (landed) {
     $('impact-label').textContent =
       {
@@ -1312,6 +1329,16 @@ function frame(time) {
   // The scene is obscured during capture. Give decoding/tracking the CPU,
   // and avoid simulating hidden tabs while another local demo is active.
   if (document.hidden || $('face-scan-dialog')?.open) return;
+  // Keep tracking live for calibration, but the blurred scene needs only a still preview.
+  if (demoFlow?.isOpen) {
+    if (tracking.active) tracking.tick(time, hands);
+    if (time - onboardingFrameTime > 100) {
+      controls.update();
+      renderer.render(scene, camera);
+      onboardingFrameTime = time;
+    }
+    return;
+  }
   const now = time / 1000;
   if (tracking.active) {
     tracking.tick(time, hands);
@@ -1717,11 +1744,15 @@ $('face-file').onchange = async (e) => {
   e.target.value = '';
   busy(true, 'Importing face asset…');
   try {
+    await startupReady;
     if (file.size > 180_000_000)
       throw new Error('Use a GLB or editable session smaller than 180 MB.');
     const ext = file.name.split('.').pop().toLowerCase();
     if (ext === 'json') {
       await restoreSession(JSON.parse(await file.text()));
+      window.dispatchEvent(
+        new CustomEvent('punching-face-model-loaded', { detail: { name: file.name } }),
+      );
       return;
     }
     if (ext === 'glb') {
@@ -1812,11 +1843,17 @@ $('face-file').onchange = async (e) => {
         ? 'Imported textured mesh · preview physics'
         : 'Imported triangle mesh';
       $('physics-engine').textContent = 'Imported preview · no Newton cage attached';
+      window.dispatchEvent(
+        new CustomEvent('punching-face-model-loaded', { detail: { name: file.name } }),
+      );
       return;
     }
     throw new Error('Choose a GLB mesh or saved session JSON.');
   } catch (err) {
     toast(err.message);
+    window.dispatchEvent(
+      new CustomEvent('punching-face-model-error', { detail: err.message }),
+    );
     console.error(err);
   } finally {
     busy(false);
@@ -2245,6 +2282,11 @@ async function loadPhotoFace(id) {
     toast(
       'Photo model and Newton ready. Inspect Geometry or Wireframe, then try a hook.',
     );
+    window.dispatchEvent(
+      new CustomEvent('punching-face-model-loaded', {
+        detail: { id, engine: 'local' },
+      }),
+    );
   } catch (e) {
     toast(e.message);
     throw e;
@@ -2261,10 +2303,16 @@ const faceCapture = new FaceCapture(loadPhotoFace, async (id) => {
   }
 });
 
-function openFaceScan() {
+function openFaceScan(model) {
   if (tracking.active) cameraToggle();
   $('capture-dialog').close();
-  faceCapture.open().catch((e) => toast(e.message));
+  void (async () => {
+    await faceCapture.open();
+    if (model?.id) {
+      await faceCapture.engines.choose(model.engine);
+      await faceCapture.select(model.id);
+    }
+  })().catch((e) => toast(e.message));
 }
 
 $('scan-face').onclick = openFaceScan;
@@ -2349,14 +2397,8 @@ $('room-height').oninput = () => {
   $('room-height-value').textContent = $('room-height').value + ' m';
 };
 
-// Fullscreen (immersive) toggle: hides side panels for a clean scene view. The
-// header — and the wordmark — stays visible so the brand doesn't disappear.
-$('fullscreen').onclick = () => {
-  document.body.classList.toggle('immersive');
-  const on = document.body.classList.contains('immersive');
-  $('fullscreen').setAttribute('aria-pressed', on ? 'true' : 'false');
-  $('fullscreen').title = on ? 'Exit fullscreen' : 'Fullscreen';
-};
+// The dashboard's fullscreen button enters the same focused demo controls.
+$('fullscreen').onclick = () => demoFlow?.begin();
 
 // Read-only diagnostics and deterministic fixture interactions for browser QA.
 window.__punchingFace = {
@@ -2487,6 +2529,9 @@ const impactControls = installImpactControls({
 });
 window.__punchingFace.applyImpact = impactControls.applyImpact;
 window.__punchingFace.setHeadMode = impactControls.setMode;
+window.addEventListener('punching-face-mode-change', ({ detail }) => {
+  if (mouthCavity) mouthCavity.visible = detail.mode !== 'clay';
+});
 realismControls = installRealismControls({
   getTarget: (current) => {
     const material = surfaceAppearance?.material ?? mesh?.material;
@@ -2544,30 +2589,8 @@ async function recover() {
       await restoreSession(saved);
       return;
     }
-    const data = await fetch('/api/face-captures').then((r) => r.json());
-    const active = sessionStorage.getItem('punching-face-active-capture');
-    if (active && data.captures.some((v) => v.id === active)) {
-      const stable = await fetch(`/api/face-asset?id=${active}&asset=mesh.json`);
-      if (stable.ok) {
-        await loadPhotoFace(active);
-        return;
-      }
-    }
-    const latest = data.captures.find((v) => v.photoModel && !v.testFixture);
-    if (latest) {
-      await loadPhotoFace(latest.id);
-      return;
-    }
-    if (recovery) {
-      let saved = JSON.parse(recovery);
-      if (saved.format === 'punching-face-session-pointer') {
-        const r = await fetch('/api/saved-session');
-        if (!r.ok) throw new Error('Saved session unavailable.');
-        saved = await r.json();
-      }
-      await restoreSession(saved);
-      return;
-    }
+    // Saved heads are loaded when chosen; do not boot Newton for a model
+    // the visitor may never use while the welcome screen is covering it.
     await reference();
   } catch (e) {
     toast(e.message);
@@ -2576,9 +2599,9 @@ async function recover() {
   }
 }
 
-recover();
+const startupReady = recover();
 
-const meshyState = { busy: false, lastGLB: null, taskId: null };
+const meshyState = { busy: false, captureId: null };
 
 async function meshyCapturePhoto() {
   if (!tracking.active) {
@@ -2741,6 +2764,7 @@ async function fitMouth(trustAnchors = false) {
     );
     if (!aperture) return null;
     mouthCavity = new MouthCavity(aperture);
+    mouthCavity.visible = $('head-mode').value !== 'clay';
     headPivot.add(mouthCavity);
     return aperture;
   } catch (error) {
@@ -2909,26 +2933,10 @@ async function meshyBuildFromPhoto() {
   busy(true, 'Capturing your photo…');
   try {
     const blob = await meshyCapturePhoto();
-    busy(true, 'Meshy is texturing your head (up to a few minutes)…');
-    const response = await fetch('/api/meshy-headshot', {
-      method: 'POST',
-      headers: { 'Content-Type': 'image/jpeg' },
-      body: blob,
-    });
-    if (!response.ok) {
-      let message = 'Meshy request failed.';
-      try {
-        message = (await response.json()).error || message;
-      } catch {}
-      throw new Error(message);
-    }
-    meshyState.taskId = response.headers.get('X-Meshy-Task-Id') || null;
-    const rawBytes = await response.arrayBuffer();
-    meshyState.lastGLB = rawBytes;
-    const bytes = await maybeCompressGLB(rawBytes);
-    await loadMeshyGLB(bytes);
+    busy(true, 'Saving your head photo…');
+    meshyState.captureId = await startMeshyPhoto(blob);
     $('beat-yourself').disabled = false;
-    toast('Meshy head loaded. Try a hook, or press "Beat yourself".');
+    toast('Photo saved. Meshy is building in the background — keep punching.');
     return true;
   } catch (e) {
     toast('Meshy: ' + e.message);
@@ -2947,20 +2955,23 @@ $('meshy-toggle').onchange = async () => {
 };
 $('beat-yourself').onclick = async () => {
   if (meshyState.busy) return;
-  if (!meshyState.lastGLB) {
+  if (!meshyState.captureId) {
     await meshyBuildFromPhoto();
-    if (!meshyState.lastGLB) return;
-  } else {
-    busy(true, 'Loading your Meshy head…');
-    try {
-      const bytes = await maybeCompressGLB(meshyState.lastGLB);
-      await loadMeshyGLB(bytes);
-    } catch (e) {
-      toast(e.message);
+    return;
+  }
+  meshyState.busy = true;
+  busy(true, 'Loading your saved Meshy head…');
+  try {
+    if (!(await loadReadyMeshyPhoto(meshyState.captureId))) {
+      toast('Meshy is still building. Keep punching while it finishes.');
       return;
-    } finally {
-      busy(false);
     }
+  } catch (e) {
+    toast(e.message);
+    return;
+  } finally {
+    meshyState.busy = false;
+    busy(false);
   }
   firstPerson();
   // fireSlap ignores the "disconnect webcam" guard on the demo helpers, so the beat-yourself
@@ -3027,3 +3038,58 @@ window.__punchingFace.remotePunch = (punch = {}) => {
     );
   return landed;
 };
+
+// The demo flow shares the existing renderer, model loaders and webcam worker.
+demoFlow = installDemoFlow({
+  ready: startupReady,
+  loadReference: async () => {
+    if (sourceName === 'Reference head' && mesh) return;
+    if (!(await reference()))
+      throw new Error('The demo head could not load. Please retry.');
+  },
+  loadSaved: async ({ id, engine }) => {
+    if (engine === 'meshy') await loadMeshyModel(id);
+    else await loadPhotoFace(id);
+  },
+  prepareImpacts: () => dynamics?.impactRig.preparer?.ready,
+  getMode: () => dynamics?.headMode ?? 'live',
+  setMode: impactControls.setMode,
+  setView,
+  firstPerson,
+  startSession: () => {
+    $('slow-motion').checked = false;
+    $('hold-peak').checked = false;
+    $('sculpt').checked = false;
+    controls.enabled = true;
+    impactHeld = false;
+    watchPeak = false;
+  },
+  resetHead: () => $('reset').click(),
+  startCamera: async () => {
+    if (!tracking.active) await cameraToggle();
+  },
+  stopCamera: () => {
+    if (tracking.active) void cameraToggle();
+  },
+  calibrate: () => tracking.calibrate(),
+  getTracking: () => ({
+    active: tracking.active,
+    calibrated: !!tracking.calibration,
+    handCount:
+      performance.now() - (tracking.results?.timestamp ?? 0) < 1000
+        ? (tracking.results?.landmarks?.length ?? 0)
+        : 0,
+    stream: tracking.stream,
+  }),
+  openCapture: openFaceScan,
+  isCapturing: () =>
+    !!(
+      faceCapture.running ||
+      faceCapture.saving ||
+      faceCapture.loading ||
+      faceCapture.submitting ||
+      faceCapture.closing
+    ),
+  closeCapture: () => ($('face-scan-dialog').open ? faceCapture.close() : undefined),
+  openUpload: () => $('face-file').click(),
+});

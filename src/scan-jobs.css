@@ -1,0 +1,163 @@
+#scan-jobs {
+  position: fixed;
+  top: 285px;
+  right: 24px;
+  width: 280px;
+  max-height: calc(100dvh - 520px);
+  overflow-y: auto;
+  z-index: 85;
+  color: #f8faf5;
+  font-family: 'DM Sans', sans-serif;
+}
+#scan-jobs[hidden],
+#scan-jobs [hidden] {
+  display: none !important;
+}
+.scan-job {
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  border: 1px solid #ffffff30;
+  border-radius: 14px;
+  background: #141a17f5;
+  box-shadow: 0 6px 24px #0000001f;
+}
+.scan-job-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.scan-job strong {
+  color: #d2eea4;
+  font-size: 12px;
+}
+.scan-job p {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #bdc8c0;
+  margin: 9px 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.scan-job progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin: 12px 0;
+  accent-color: #d2eea4;
+}
+#scan-jobs button {
+  font-family: inherit;
+  cursor: pointer;
+}
+#scan-jobs .scan-job-action {
+  background: #d2eea4;
+  color: #162315;
+  border: 0;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 8px 12px;
+  width: 100%;
+}
+#scan-jobs .scan-job-dismiss {
+  background: transparent;
+  border: 0;
+  color: #bdc8c0;
+  padding: 0 3px;
+  font-size: 18px;
+}
+#scan-ready-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(440px, calc(100vw - 40px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 34px;
+  background: #eff2eb;
+  border: 1px solid #fff9;
+  border-radius: 20px;
+  color: #24331f;
+  font-family: 'DM Sans', sans-serif;
+}
+#scan-ready-dialog::backdrop {
+  background: #1b241f99;
+  backdrop-filter: blur(7px);
+}
+.scan-ready-mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  margin: 0 auto 22px;
+  background: #d2eea4;
+  font-size: 28px;
+}
+#scan-ready-dialog h1 {
+  margin: 0 0 12px;
+  font:
+    600 30px/1.1 'Space Grotesk',
+    sans-serif;
+  letter-spacing: -1px;
+}
+#scan-ready-dialog p {
+  font-size: 13px;
+  color: #65745d;
+}
+#scan-ready-status {
+  min-height: 18px;
+}
+.scan-ready-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+}
+.scan-ready-actions button {
+  flex: 1;
+  padding: 12px;
+  border: 1px solid #354e2d;
+  border-radius: 8px;
+  background: #354e2d;
+  color: white;
+  font:
+    600 13px 'DM Sans',
+    sans-serif;
+  cursor: pointer;
+}
+.scan-ready-actions button:last-child {
+  background: transparent;
+  color: #354e2d;
+}
+.scan-ready-actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+body.demo-onboarding-open #scan-jobs {
+  visibility: hidden;
+}
+#face-scan-background {
+  margin: 0 0 12px;
+}
+@media (max-height: 730px) {
+  #scan-jobs {
+    top: 260px;
+    max-height: calc(100dvh - 440px);
+  }
+}
+@media (max-width: 650px) {
+  #scan-jobs {
+    right: 14px;
+    width: 175px;
+    top: 265px;
+    max-height: calc(100dvh - 410px);
+  }
+  .scan-job {
+    padding: 10px;
+  }
+}
