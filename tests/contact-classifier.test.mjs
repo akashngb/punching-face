@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ContactClassifier, arenaRegions} from '../src/contact/classifier.js';
+import {ContactClassifier, arenaRegions, forceFromSpeed} from '../src/contact/classifier.js';
 
 test('arenaRegions maps points to zones', () => {
   assert.equal(arenaRegions({x: -0.05, y: 0, z: 0}), 'cheek-left');
@@ -18,7 +18,7 @@ test('strike is emitted with region and force, and debounced', () => {
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'strike');
   assert.equal(events[0].region, 'cheek-left');
-  assert.ok(events[0].force > 0);
+  assert.equal(events[0].force, forceFromSpeed(2));
   clf.dispose();
 });
 

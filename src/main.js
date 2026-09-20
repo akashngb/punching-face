@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { NewtonFaceDynamics } from './newton-dynamics.js';
-import { FaceDynamics, clamp, sweptEllipsoid } from './physics.js';
+import { FaceDynamics, clamp } from './physics.js';
 import { ImpactReferences } from './impact-references.js';
 import { ArmCapture } from './arm-capture.js';
 import { FaceCapture } from './face-capture.js';
@@ -11,42 +11,20 @@ import { ScannedArm } from './scanned-arm.js';
 import { HeadGlasses } from './head-accessories.js';
 import { HeadHair, remapHairRoots } from './head-hair.js';
 import { SurfaceAppearance, weldTexturedSurface } from './surface-appearance.js';
-import { refineSurface } from './surface.js';
+import { normalizeHead, refineSurface } from './surface.js';
 import { VirtualHand, Tracking, makePhotoFace, cropFacePortrait } from './hands.js';
-import { SlapDetector, DEFAULT_TUNING } from './slap-detect.js';
+import { HeadCollider, StrikeTracker } from './strike-system.js';
 import './style.css';
 
 const $=id=>document.getElementById(id);
 document.querySelector('#app').innerHTML=`
 <header><div class="brand"><svg viewBox="0 0 32 32" fill="none"><path d="M26 7 16 2 5 8v16l11 6 10-6V14l-10-5-5 3v9l5 3 5-3v-4l-5-3" stroke="#46663a" stroke-width="2.5" stroke-linejoin="round"/></svg><span class="wordmark">PUNCHING FACE</span></div><div class="header-right"><div id="meshy-panel"><label class="meshy-check"><input id="meshy-toggle" type="checkbox"><span>Photo → 3D self</span></label><label class="meshy-check"><input id="compress-toggle" type="checkbox"><span>Compress GLB</span></label><button id="beat-yourself" class="small" disabled>Beat yourself</button></div><button id="fullscreen" class="small icon-btn" aria-label="Toggle fullscreen" title="Fullscreen">⤢</button><button id="capture-open" class="small">Capture guide ↗</button></div></header>
 <main><aside class="panel left"><section class="panel-section"><h2>Face</h2><div class="face-info"><strong id="model-name">Reference head</strong><small id="model-kind">Public mesh reference</small></div><button id="scan-face" class="full primary" style="margin-bottom:7px">Record / upload head video</button><button id="import-face" class="full small" style="margin-bottom:7px">↑ Upload GLB head</button><button id="reference" class="full small">↺ Reset to reference</button><input id="face-file" type="file" accept=".glb,.json"><p id="photo-count" class="muted">Saved multiview photos</p><p id="mesh-count" class="muted">Loading reconstruction…</p></section>
-<section class="panel-section"><h2>Camera</h2><button id="camera" class="full primary">Connect laptop webcam</button><video id="webcam" class="camera-preview" playsinline muted></video><p id="tracking-status" class="muted">Connect your camera for tracking.</p><button id="calibrate" class="full small" disabled>Calibrate guard position</button><button id="scan-arms" class="full small" style="margin-top:7px">Scan my arms</button><p id="arm-appearance" class="muted">Personal arm meshes: awaiting capture.</p><label class="check">Demo hand shapes <input id="demo-hands" type="checkbox"></label></section>
+<section class="panel-section"><h2>Camera</h2><button id="camera" class="full primary">Connect laptop webcam</button><video id="webcam" class="camera-preview" playsinline muted></video><p id="tracking-status" class="muted">Connect your camera, then hold your hands still in guard while they calibrate.</p><button id="calibrate" class="full small" disabled>Recalibrate guard</button><label class="controls-label" for="hand-display">Hand display</label><select id="hand-display"><option value="wireframe">Tracking wireframe</option></select><button id="scan-arms" class="full small" style="margin-top:7px">Scan my arms</button><p id="arm-appearance" class="muted">Personal arm meshes: awaiting capture.</p></section>
 <section class="panel-section"><h2>Room</h2><button id="import-room" class="full small">↑ Add room panorama</button><input id="room-file" type="file" accept=".jpg,.jpeg,.png"><p id="room-label" class="muted">Studio environment · placeholder</p><div id="room-fields" class="room-fields"><label class="controls-label">Heading <output id="room-yaw-value">0°</output></label><input id="room-yaw" aria-label="Room heading" type="range" min="-180" max="180" value="0"><label class="controls-label">Scale <output id="room-scale-value">1×</output></label><input id="room-scale" aria-label="Room scale" type="range" min=".2" max="3" step=".01" value="1"><label class="controls-label">Height <output id="room-height-value">0 m</output></label><input id="room-height" aria-label="Room height" type="range" min="-3" max="3" step=".01" value="0"><button id="reset-room" class="small full">Restore studio</button></div></section></aside>
 <section class="stage-shell"><div id="stage" class="stage"></div><div class="stage-top"><div class="scene-name" id="scene-name">Reference head <span>CPU Poisson surface</span></div><div id="stage-status" class="stage-status">● DEMO INPUT</div></div><div class="view-switch"><button id="view-mesh" class="active">Surface</button><button id="view-clay">Geometry</button><button id="view-wire">Wireframe</button></div><div class="reticle"></div><div id="impact-label" class="impact-label">CONTACT REGISTERED</div>
-<div id="slap-hud" class="slap-hud">
-  <div class="slap-title"><span>PUNCH DETECTOR</span><span id="slap-state-badge" class="slap-badge idle">idle</span></div>
-  <div class="slap-view">
-    <video id="slap-preview" playsinline muted></video>
-    <div class="slap-view-overlay">
-      <div class="slap-strike-zone" style="left:0;right:61%"></div>
-      <div class="slap-strike-zone" style="left:61%;right:0"></div>
-      <div class="slap-strike-zone slap-strike-uppercut" style="left:22%;right:22%;top:0;bottom:65%"></div>
-      <svg id="slap-view-hand" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"><polygon id="slap-view-hand-fill" points=""/><path id="slap-view-hand-links" d=""/><g id="slap-view-hand-joints"></g></svg>
-      <div id="slap-view-flash"></div>
-      <div class="slap-view-legend"><span>LEFT</span><span>UP</span><span>RIGHT</span></div>
-    </div>
-    <div id="slap-view-empty">Connect camera to see the detector view</div>
-  </div>
-  <div class="slap-body">
-    <div class="slap-metric"><span class="slap-label">Approach</span><div class="slap-bar"><div id="slap-growth-fill"></div><div id="slap-growth-mark" class="slap-threshold"></div></div><span id="slap-growth-val" class="slap-value">0.0/s</span></div>
-    <div class="slap-metric"><span class="slap-label">Rise</span><div class="slap-bar slap-bar-signed"><div id="slap-vy-fill"></div><div id="slap-vy-mark" class="slap-threshold"></div></div><span id="slap-vy-val" class="slap-value">0.0/s</span></div>
-    <div class="slap-metric"><span class="slap-label">Palm size</span><div class="slap-bar"><div id="slap-width-fill"></div><div id="slap-width-mark" class="slap-threshold"></div></div><span id="slap-width-val" class="slap-value">0.00</span></div>
-    <div class="slap-metric"><span class="slap-label">Last hit</span><span id="slap-last" class="slap-value">—</span></div>
-    <div class="slap-metric"><span class="slap-label">Latency</span><span class="slap-value"><b id="cv-latency">—</b>ms cv · <b id="hit-latency">—</b>ms hit · <b id="fps">—</b> fps</span></div>
-  </div>
-</div>
-<div class="stage-bottom"><div class="hint"><span><kbd>Q</kbd>Left hook</span><span><kbd>E</kbd>Right hook</span><span><kbd>Space</kbd>Uppercut</span><span><kbd>Drag</kbd>Inspect</span></div><div class="bottom-line"><span id="view-label">FIRST-PERSON · VIRTUAL HANDS</span><span id="slap-status-line">Connect webcam · palm toward camera = punch</span></div></div><div id="toast" class="toast" role="status"></div><div id="busy" class="busy-overlay"><div><div class="spinner"></div><div id="busy-text">Preparing surface…</div><p class="muted">Processed on this computer.</p></div></div></section>
-<aside class="panel right"><section class="panel-section"><h2>Contact response</h2><div class="metric-grid"><div class="metric"><strong id="impacts">00</strong><small>Contacts</small></div><div class="metric"><strong><span id="speed">0.0</span><em>m/s*</em></strong><small>Last speed</small></div></div><canvas id="signal" class="signal" width="400" height="100"></canvas><div class="controls-label"><span>Peak deformation</span><output id="compression">0.0 mm</output></div><label class="controls-label">Softness <output id="softness-value">60%</output></label><input id="softness" aria-label="Softness" type="range" min="0" max="1" value=".6" step=".01"><label class="controls-label">Distance <output id="distance-value">55 cm</output></label><input id="distance" aria-label="Target distance" type="range" min=".35" max=".8" value=".55" step=".01"><div class="row"><button id="left-hook" class="small">↗ Left hook</button><button id="right-hook" class="small">Right hook ↖</button></div>
+<div class="stage-bottom"><div class="hint"><span><kbd>Q</kbd>Left hook</span><span><kbd>E</kbd>Right hook</span><span><kbd>Space</kbd>Uppercut</span><span><kbd>Drag</kbd>Inspect</span></div><div class="bottom-line"><span id="view-label">FIRST-PERSON · VIRTUAL HANDS</span><span>Calibrate in guard · close fist · strike the mesh</span></div></div><div id="toast" class="toast" role="status"></div><div id="busy" class="busy-overlay"><div><div class="spinner"></div><div id="busy-text">Preparing surface…</div><p class="muted">Processed on this computer.</p></div></div></section>
+<aside class="panel right"><section class="panel-section"><h2>Contact response</h2><div class="metric-grid"><div class="metric"><strong id="impacts">00</strong><small>Contacts</small></div><div class="metric"><strong><span id="speed">0.0</span><em>m/s*</em></strong><small>Last speed</small></div></div><canvas id="signal" class="signal" width="400" height="100"></canvas><div class="controls-label"><span>Peak deformation</span><output id="compression">0.0 mm</output></div><label class="controls-label">Softness <output id="softness-value">60%</output></label><input id="softness" aria-label="Softness" type="range" min="0" max="1" value=".6" step=".01"><label class="controls-label">Distance <output id="distance-value">30 cm</output></label><input id="distance" aria-label="Target distance" type="range" min=".24" max=".8" value=".30" step=".01"><div class="row"><button id="left-hook" class="small">↗ Left hook</button><button id="right-hook" class="small">Right hook ↖</button></div>
 <label class="check">Hold peak deformation <input id="hold-peak" type="checkbox"></label><button id="resume-impact" class="small full">Release deformation</button><label class="check">Head recoil <input id="head-recoil" type="checkbox" checked></label><label class="check">Slow motion <input id="slow-motion" type="checkbox" checked></label><p id="region-readout" class="muted">Facial impact rig · ready</p><p id="physics-engine" class="muted">Select a reconstructed photo model.</p></section>
 <section class="panel-section"><h2>Surface & rig</h2><label class="check">Wireframe <input id="wire" type="checkbox"></label><label class="check">Rig markers <input id="rig" type="checkbox"></label><label class="check">Sculpt <input id="sculpt" type="checkbox"></label><div class="row"><button id="undo" class="small">↶ Undo</button><button id="redo" class="small">Redo ↷</button></div><label class="controls-label">Jaw <output id="jaw-value">0%</output></label><input id="jaw" aria-label="Jaw opening" type="range" min="0" max="1" step=".01" value="0"><label class="controls-label">Smile <output id="smile-value">0%</output></label><input id="smile" aria-label="Lip corner pull" type="range" min="0" max="1" step=".01" value="0"><details><summary>Accessories & alignment</summary><label class="check">3D glasses <input id="glasses" type="checkbox" disabled></label><p id="eye-detail-status" class="muted" role="status"></p><label class="check">Strand hair <input id="hair-visible" type="checkbox" disabled></label><details id="hair-controls"><summary>Hair style</summary><p id="hair-description" class="muted">Rebuild a head scan with AI hair analysis to add editable strands.</p><label class="controls-label" for="hair-type">Type</label><select id="hair-type" disabled><option value="straight">Straight</option><option value="wavy">Wavy</option><option value="curly">Curly</option><option value="coily">Coily</option><option value="braided">Braided</option><option value="locs">Locs</option></select><label class="controls-label">Top length, mm</label><input id="hair-length" aria-label="Hair top length" type="range" min="1" max="450" step="1" disabled><label class="controls-label">Curl</label><input id="hair-curl" aria-label="Hair curl tightness" type="range" min="0" max="1" step=".01" disabled><label class="controls-label">Root lift, mm</label><input id="hair-lift" aria-label="Hair root lift" type="range" min="0" max="12" step=".1" disabled><label class="controls-label">Frizz</label><input id="hair-frizz" aria-label="Hair frizz" type="range" min="0" max="1" step=".01" disabled></details><label class="controls-label">Brow raise</label><input id="brow" aria-label="Brow raise" type="range" min="0" max="1" step=".01" value="0"><label class="controls-label">Lid compression</label><input id="squint" aria-label="Lid compression" type="range" min="0" max="1" step=".01" value="0"><label class="controls-label">Face heading</label><input id="face-yaw" aria-label="Face heading" type="range" min="-180" max="180" value="0"><label class="controls-label">Face tilt</label><input id="face-pitch" aria-label="Face tilt" type="range" min="-180" max="180" value="0"><button id="first-person" class="small full">Reset view</button><button id="impact-references" class="small full" style="margin-top:7px">Impact reference library</button></details></section>
 <section class="panel-section"><div class="row"><button id="reset" class="small">Reset face</button><button id="export" class="small primary">Export GLB ↗</button></div><button id="save" class="small full" style="margin-top:7px">Save editable session</button><details><summary>Reconstruction evidence</summary><div id="stats-detail"></div></details></section></aside></main>
@@ -58,7 +36,7 @@ const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-per
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;
 $('stage').appendChild(renderer.domElement);
 
-const controls=new OrbitControls(camera,renderer.domElement);controls.target.set(0,0,-.55);controls.enablePan=false;controls.enableDamping=true;controls.minDistance=.22;controls.maxDistance=1.6;controls.maxPolarAngle=Math.PI*.9;
+const controls=new OrbitControls(camera,renderer.domElement);controls.target.set(0,0,-.30);controls.enablePan=false;controls.enableDamping=true;controls.minDistance=.22;controls.maxDistance=1.6;controls.maxPolarAngle=Math.PI*.9;
 const ambient=new THREE.HemisphereLight(0xffffff,0xdcdfd6,2.7);scene.add(ambient);
 const key=new THREE.DirectionalLight(0xfff2e0,2.4);key.position.set(-1,1.6,1);scene.add(key);
 const rim=new THREE.DirectionalLight(0xe4e9ff,1.3);rim.position.set(.8,.4,-1.3);scene.add(rim);
@@ -76,7 +54,7 @@ wallGrid(8,32,0,0,0,-1.268,-1);
 wallGrid(8,32,Math.PI/2,0,0,.6,-3.28);
 wallGrid(6,24,0,Math.PI/2,-2.28,.6,-.6);
 wallGrid(6,24,0,Math.PI/2,2.28,.6,-.6);
-const target=new THREE.Group();target.position.set(0,.015,-.55);scene.add(target);
+const target=new THREE.Group();target.position.set(0,.015,-.30);scene.add(target);
 const headPivot=new THREE.Group();target.add(headPivot);
 const handGroup=new THREE.Group();scene.add(handGroup);const hands=[new VirtualHand(-1),new VirtualHand(1)];hands.forEach(h=>handGroup.add(h));
 const rigMarkers=new THREE.Group();headPivot.add(rigMarkers);rigMarkers.visible=false;
@@ -85,9 +63,8 @@ let impacts=0,lastSpeed=0,normalClock=0,peak=0,mode='demo',demo=null,toastTimer,
 let surfaceAppearance=null,headGlasses=null,headHair=null;
 let meshMatchesSource=true,impactHeld=false,watchPeak=false,previousDisplacement=0;
 const raycaster=new THREE.Raycaster();const screen=new THREE.Vector2();
-const tracking=new Tracking($('webcam'),message=>{$('tracking-status').textContent=message;});
-const slapDetector=new SlapDetector();
-let lastSlapResultTs=0,lastSlapEvent=null;
+const tracking=new Tracking($('webcam'),message=>{$('tracking-status').textContent=message;},{autoCalibrate:true,targetDistance:.30});
+const strikeTracker=new StrikeTracker(),headCollider=new HeadCollider([],headPivot,()=>dynamics);
 const referenceLibrary=new ImpactReferences();$('impact-references').onclick=()=>referenceLibrary.open();
 const scannedArms=new Map();
 const armCapture=new ArmCapture(tracking,async bundle=>{
@@ -141,6 +118,7 @@ function installMesh(g,material,meta={}){
   if(wireMesh){wireMesh.removeFromParent();wireMesh.material.dispose();wireMesh=null;}if(clayMesh){clayMesh.removeFromParent();clayMesh.material.dispose();clayMesh=null;}
   disposeMesh(mesh);mesh=new THREE.Mesh(g,material??new THREE.MeshStandardMaterial({vertexColors:true,roughness:.86,metalness:0,side:THREE.DoubleSide}));mesh.name='Editable face';headPivot.add(mesh);clayMesh=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0xbfc2bd,roughness:.8,side:THREE.DoubleSide}));clayMesh.visible=false;headPivot.add(clayMesh);
   $('physics-engine').textContent='Preview springs + facial impact rig';dynamics=new FaceDynamics(g);dynamics.softness=Number($('softness').value);
+  headCollider.set([mesh],headPivot,()=>dynamics);strikeTracker.reset();
   wireMesh=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0xb9eb9a,wireframe:true,transparent:true,opacity:.28,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1}));headPivot.add(wireMesh);
   wireMesh.visible=$('wire').checked;
   while(rigMarkers.children.length){const m=rigMarkers.children.pop();m.geometry.dispose();m.material.dispose();}
@@ -173,65 +151,26 @@ async function reference(){
 }
 
 function firstPerson(){camera.position.set(0,0,0);controls.target.set(0,.015,-Number($('distance').value));camera.lookAt(controls.target);controls.update();}
-function contact(point,direction,speed,source,mode='hook'){
+function contact(point,direction,speed,source,mode='hook',region='face',intensity=clamp(speed*32,0,100)){
   if(!dynamics)return false;
   impactHeld=false;watchPeak=true;previousDisplacement=0;const affected=dynamics.impulse(point,direction,speed,mode);if(!affected)return false;
   impacts++;lastSpeed=speed;peak=0;$('impacts').textContent=String(impacts).padStart(2,'0');$('speed').textContent=speed.toFixed(1);
-  $('impact-label').textContent=source==='webcam'?'TRACKED CONTACT':'DEMO CONTACT';$('impact-label').classList.remove('flash');void $('impact-label').offsetWidth;$('impact-label').classList.add('flash');
-  if(source==='webcam'&&tracking.results){$('hit-latency').textContent=Math.round(Math.max(0,performance.now()-tracking.results.timestamp));}
-  window.__lastContact={point:point.toArray(),direction:direction.toArray(),speed,affected,source,time:performance.now()};return true;
+  $('impact-label').textContent=`${region.toUpperCase()} CONTACT`;$('impact-label').classList.remove('flash');void $('impact-label').offsetWidth;$('impact-label').classList.add('flash');
+  window.__lastContact={point:point.toArray(),direction:direction.toArray(),speed,intensity,region,affected,source,time:performance.now()};return true;
 }
-function checkContact(hand,dt,now,source,mode='hook'){
-  if(!mesh||!hand.visible||now-hand.lastHit<.12)return;
-  // Fist gate removed: rely on the swept-ellipsoid + raycast narrow phase to reject
-  // any motion that isn't actually driving the hand into the face. Motion blur during
-  // a real punch often mis-classifies as an open hand, so the classifier was a false gate.
-  const velocity=hand.center.clone().sub(hand.previous).divideScalar(Math.max(dt,1/120));const speed=velocity.length();if(speed<.35)return;
-  headPivot.updateWorldMatrix(true,false);
-  const from=headPivot.worldToLocal(hand.previous.clone()),to=headPivot.worldToLocal(hand.center.clone());
-  mesh.geometry.computeBoundingBox();const bounds=mesh.geometry.boundingBox;
-  const center=bounds.getCenter(new THREE.Vector3()),radii=bounds.getSize(new THREE.Vector3()).multiplyScalar(.5);
-  if(sweptEllipsoid(from.toArray(),to.toArray(),center.toArray(),radii.toArray(),.037)===null)return;
-  // Narrow phase samples the real mesh along the motion and radial probe rays.
-  // This is a small swept-sphere approximation, not a medical contact solver.
-  const travel=to.clone().sub(from),length=travel.length(),dir=travel.clone().normalize();
-  let hit=null;
-  for(const offset of [[0,0,0],[.026,0,0],[-.026,0,0],[0,.026,0],[0,-.026,0]]){
-    const start=from.clone().add(new THREE.Vector3(...offset));
-    const worldStart=headPivot.localToWorld(start);const worldDir=dir.clone().transformDirection(headPivot.matrixWorld);
-    raycaster.set(worldStart,worldDir);raycaster.far=length+.045;
-    const h=raycaster.intersectObject(mesh,false)[0];if(h){hit=h;break;}
-  }
-  raycaster.far=Infinity;
-  if(!hit){
-    // A hook can graze the cheek without the fist centre ray intersecting it.
-    // Test the swept fist radius against the actual densely sampled surface.
-    const p=mesh.geometry.attributes.position.array,n=mesh.geometry.attributes.normal.array,denom=Math.max(travel.lengthSq(),1e-12);let best=.037*.037,closest=-1;
-    for(let i=0;i<p.length;i+=3){
-      if(dynamics.binding&&!dynamics.binding.active[i/3])continue;
-      const px=p[i]-from.x,py=p[i+1]-from.y,pz=p[i+2]-from.z,t=clamp((px*travel.x+py*travel.y+pz*travel.z)/denom,0,1);
-      const d=(px-travel.x*t)**2+(py-travel.y*t)**2+(pz-travel.z*t)**2;if(d<best){best=d;closest=i;}
-    }
-    if(closest>=0)hit={point:headPivot.localToWorld(new THREE.Vector3(...p.slice(closest,closest+3))),face:{normal:new THREE.Vector3(...n.slice(closest,closest+3))}};
-  }
-  if(!hit)return;
-  const point=headPivot.worldToLocal(hit.point.clone());
-  const localDir=velocity.clone().normalize().transformDirection(new THREE.Matrix4().copy(headPivot.matrixWorld).invert());
-  const inward=hit.face.normal.clone().normalize();if(inward.dot(localDir)<0)inward.negate();localDir.multiplyScalar(.35).addScaledVector(inward,.65).normalize();
-  // For an uppercut demo the punch is unambiguously rising into the chin; bias
-  // the impulse direction upward so the recoil pitches back instead of yawing.
-  if(mode==='uppercut')localDir.set(0,.7,-.6).normalize();
-  if(contact(point,localDir,clamp(speed,0,4),source,mode))hand.lastHit=now;
+function trackStrike(hand,timestamp,source){
+  if(!mesh||!hand.visible||(source==='webcam'&&(!hand.tracked||!hand.calibrated)))return;
+  const event=strikeTracker.update({hand:hand.side,position:hand.center.toArray(),target:headCollider.targetWorld().toArray(),timestamp,closed:hand.closed,confidence:hand.confidence||1},sweep=>headCollider.sweep(sweep));
+  if(!event)return;
+  const body=event.region==='shoulder'||event.region==='chest';
+  contact(new THREE.Vector3(...event.point),new THREE.Vector3(...event.direction),clamp(event.speed,0,4),source,body?'body':event.mode,event.region,event.intensity);
 }
 // Prefer the Newton cage vertex if we have one, then the adaptive rig anchor from detectAnchors
 // (so Meshy/upload heads land on the real cheek/chin), and only as a last resort the reference-frame default.
 function rigGoal(index,fallback){const cage=dynamics.cage?.positions;if(cage)return new THREE.Vector3(cage[index*3],cage[index*3+1],cage[index*3+2]);const a=dynamics.impactRig?.anchors?.[index];if(a)return new THREE.Vector3(a[0],a[1],a[2]);return fallback.clone();}
-function hook(side){if(!mesh||!meshMatchesSource)return;if(tracking.active){toast('Disconnect webcam to run a demo hook.');return;}firstPerson();headPivot.updateWorldMatrix(true,false);const goal=rigGoal(side<0?50:280,new THREE.Vector3(side*.045,-.005,.055));headPivot.localToWorld(goal);demo={side,type:'hook',start:performance.now()/1000,previousT:0,goal};}
-function uppercut(){if(!mesh||!meshMatchesSource)return;if(tracking.active){toast('Disconnect webcam to run a demo uppercut.');return;}firstPerson();headPivot.updateWorldMatrix(true,false);const goal=rigGoal(152,new THREE.Vector3(0,-.062,.05));headPivot.localToWorld(goal);demo={side:1,type:'uppercut',start:performance.now()/1000,previousT:0,goal};}
-// Immediate physical hit from a slap-detector event. Uses the fitted face cage
-// landmarks (50/280 = cheeks, 152 = chin, 1 = nose tip) so the impact lands on
-// the actual mesh regardless of head pose/scale.
-function fireSlap(event){
+function hook(side){if(!mesh||!meshMatchesSource)return;if(tracking.active){toast('Disconnect webcam to run a demo hook.');return;}firstPerson();strikeTracker.reset(side);headPivot.updateWorldMatrix(true,false);const goal=rigGoal(side<0?50:280,new THREE.Vector3(side*.045,-.005,.055));headPivot.localToWorld(goal);demo={side,type:'hook',start:performance.now()/1000,previousT:0,goal};}
+function uppercut(){if(!mesh||!meshMatchesSource)return;if(tracking.active){toast('Disconnect webcam to run a demo uppercut.');return;}firstPerson();strikeTracker.reset(1);headPivot.updateWorldMatrix(true,false);const goal=rigGoal(152,new THREE.Vector3(0,-.062,.05));headPivot.localToWorld(goal);demo={side:1,type:'uppercut',start:performance.now()/1000,previousT:0,goal};}
+function scriptedImpact(event){
   if(!mesh||!dynamics)return false;
   let localPoint,localDir;
   if(event.type==='uppercut'){
@@ -256,71 +195,25 @@ function fireSlap(event){
   const hit=raycaster.intersectObject(mesh,false)[0];
   const finalLocal=hit?headPivot.worldToLocal(hit.point.clone()):localPoint;
   raycaster.far=Infinity;
-  const speed=clamp(0.9+Math.max(0,event.growth)*2.6,0.9,3.4);
+  const speed=clamp(event.speed??1.8,.9,3.4);
   const mode=event.type==='uppercut'?'uppercut':event.type==='jab'?'jab':'hook';
-  const landed=contact(finalLocal,localDir,speed,'webcam',mode);
-  if(landed){
-    $('impact-label').textContent=({hook:event.side==='left'?'LEFT HOOK':'RIGHT HOOK',uppercut:'UPPERCUT',jab:'STRAIGHT'})[event.type]||'CONTACT';
-    lastSlapEvent={...event,at:performance.now(),landed:true};
-  }
-  return landed;
-}
-// MediaPipe hand skeleton (21 landmarks): [wrist, thumb×4, index×4, middle×4, ring×4, pinky×4].
-const SLAP_HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
-const SLAP_HAND_TIPS=[4,8,12,16,20];
-function drawSlapHand(state){
-  const hand=$('slap-view-hand'),links=$('slap-view-hand-links'),fill=$('slap-view-hand-fill'),joints=$('slap-view-hand-joints');
-  if(!state.landmarks||!state.handDetected){hand.classList.remove('visible','armed');links.setAttribute('d','');fill.setAttribute('points','');joints.replaceChildren();return;}
-  // Video is mirrored via CSS scaleX(-1); flip x here so the skeleton lines up with the user's hand.
-  const pts=state.landmarks.map(p=>({x:1-clamp(p.x,0,1),y:clamp(p.y,0,1)}));
-  links.setAttribute('d',SLAP_HAND_LINKS.map(([a,b])=>`M${pts[a].x.toFixed(4)} ${pts[a].y.toFixed(4)}L${pts[b].x.toFixed(4)} ${pts[b].y.toFixed(4)}`).join(''));
-  fill.setAttribute('points',SLAP_HAND_TIPS.map(i=>`${pts[i].x.toFixed(4)},${pts[i].y.toFixed(4)}`).join(' '));
-  if(joints.childElementCount!==pts.length){joints.replaceChildren(...pts.map(()=>document.createElementNS('http://www.w3.org/2000/svg','circle')));}
-  for(let i=0;i<pts.length;i++){const c=joints.children[i];c.setAttribute('cx',pts[i].x.toFixed(4));c.setAttribute('cy',pts[i].y.toFixed(4));c.setAttribute('r',SLAP_HAND_TIPS.includes(i)?0.014:i===0?0.017:0.008);}
-  hand.classList.add('visible');
-  // "Armed" — palm is inside the trigger range. The fingertip polygon still grows/shrinks
-  // continuously with palm size, so users see the ramp toward this yellow state.
-  hand.classList.toggle('armed',state.palmWidth>=slapDetector.tuning.minWidth);
-}
-function updateSlapHud(nowMs){
-  const s=slapDetector.state,t=slapDetector.tuning;
-  const widthPct=clamp(s.palmWidth/0.30,0,1)*100;
-  const growthPct=clamp(s.growth/0.90,0,1)*100;
-  const vyPct=clamp(-s.vy/1.5,-1,1)*50;
-  $('slap-width-fill').style.width=widthPct+'%';
-  $('slap-width-mark').style.left=(t.minWidth/0.30*100)+'%';
-  $('slap-growth-fill').style.width=growthPct+'%';
-  $('slap-growth-mark').style.left=(t.minGrowth/0.90*100)+'%';
-  const vyFill=$('slap-vy-fill');vyFill.style.left=(vyPct>=0?50:50+vyPct)+'%';vyFill.style.width=Math.abs(vyPct)+'%';vyFill.classList.toggle('rising',s.vy<0);
-  $('slap-vy-mark').style.left=(50+(t.minVerticalUp/1.5*50))+'%';
-  $('slap-width-val').textContent=s.palmWidth.toFixed(2);
-  $('slap-growth-val').textContent=s.growth.toFixed(1)+'/s';
-  $('slap-vy-val').textContent=(-s.vy).toFixed(1)+'/s up';
-  drawSlapHand(s);
-  if(s.triggered){const flash=$('slap-view-flash');flash.className='';void flash.offsetWidth;flash.className='fire type-'+s.triggered.type;}
-  const badge=$('slap-state-badge');
-  const stateClass=s.triggered?'hit':s.handDetected?(s.reason.startsWith('ready')?'armed':'watching'):'idle';
-  badge.className='slap-badge '+stateClass;
-  badge.textContent=s.triggered?s.reason:(s.handDetected?s.reason:tracking.active?'searching':'idle');
-  if(lastSlapEvent){
-    const age=Math.round((nowMs-lastSlapEvent.at));
-    const label={hook:lastSlapEvent.side==='left'?'LEFT HOOK':'RIGHT HOOK',uppercut:'UPPERCUT',jab:'STRAIGHT'}[lastSlapEvent.type]||'HIT';
-    $('slap-last').innerHTML=`<span class="tag-${lastSlapEvent.type}">${label}</span> · ${age<1000?age+' ms':(age/1000).toFixed(1)+' s'} ago`;
-  }else if(tracking.active){
-    $('slap-last').textContent='—';
-  }
+  return contact(finalLocal,localDir,speed,'demo',mode,'face');
 }
 
 function drawTrace(){const canvas=$('signal'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,400,100);ctx.strokeStyle='#d8dfd0';ctx.lineWidth=1;for(let y=25;y<100;y+=25){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(400,y);ctx.stroke();}ctx.beginPath();trace.forEach((v,i)=>{const x=i/(trace.length-1)*400,y=92-Math.min(v/.018,1)*80;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.lineWidth=2;ctx.strokeStyle='#749b54';ctx.stroke();}
-let lastTime=performance.now(),frames=0,fpsTime=lastTime;
+let lastTime=performance.now();
 function frame(time){
   const dt=Math.min((time-lastTime)/1000,1/30);lastTime=time;const now=time/1000;
-  if(tracking.active){tracking.tick(time,hands);mode='webcam';}
+  if(tracking.active){
+    tracking.tick(time,hands);mode='webcam';
+    const tracked=hands.filter(hand=>hand.tracked),ready=tracked.filter(hand=>hand.calibrated);
+    $('tracking-status').textContent=tracked.length?(ready.length===tracked.length?`${ready.length} hand${ready.length===1?'':'s'} ready · close your fist and punch`:'Hold still in guard · calibrating…'):'Searching for your hands…';
+  }
   else{
-    mode='demo';
+    mode='demo';const restZ=-Math.max(.12,Number($('distance').value)-.20);
     for(const hand of hands){hand.visible=true;const side=hand.side;
       if(demo&&demo.side===side){const t=(now-demo.start)/.72;
-        if(t>1){demo=null;hand.demoPose(new THREE.Vector3(side*.11,-.10,-.32),0);}
+        if(t>1){demo=null;hand.demoPose(new THREE.Vector3(side*.11,-.10,restZ),0);}
         else{
           const a=clamp(t/.52,0,1),b=clamp((t-.52)/.48,0,1);const strike=Math.sin(a*Math.PI/2)*(1-b);
           const goal=demo.goal;
@@ -329,25 +222,18 @@ function frame(time){
           // opening back up as the follow-through decays (b→1) so the recovery reads as relaxed.
           const closedAmount=clamp(a-b*0.6,0,1);
           if(demo.type==='uppercut'){
-            const x=side*.05*(1-strike)+goal.x*strike,y=-.32*(1-strike)+(goal.y-.005)*strike,z=-.30*(1-strike)+(goal.z-.02)*strike;
-            hand.demoPose(new THREE.Vector3(x,y,z),closedAmount);checkContact(hand,dt,now,'demo','uppercut');
+            const x=side*.05*(1-strike)+goal.x*strike,y=-.32*(1-strike)+(goal.y-.005)*strike,z=restZ*(1-strike)+(goal.z-.02)*strike;
+            hand.demoPose(new THREE.Vector3(x,y,z),closedAmount);
           }else{
-            const x=side*.24*(1-strike)+(goal.x-side*.020)*strike,y=-.13*(1-strike)+(goal.y+.012)*strike,z=-.24*(1-strike)+(goal.z-.023)*strike;
-            hand.demoPose(new THREE.Vector3(x,y,z),closedAmount);checkContact(hand,dt,now,'demo','hook');
+            const x=side*.24*(1-strike)+(goal.x-side*.020)*strike,y=-.13*(1-strike)+(goal.y+.012)*strike,z=restZ*(1-strike)+(goal.z-.023)*strike;
+            hand.demoPose(new THREE.Vector3(x,y,z),closedAmount);
           }
         }
-      }else{hand.demoPose(new THREE.Vector3(side*.11,-.10+Math.sin(now*1.4+side)*.002,-.32),0);}
+      }else{hand.demoPose(new THREE.Vector3(side*.11,-.10+Math.sin(now*1.4+side)*.002,restZ),0);}
+      trackStrike(hand,time,'demo');
     }
   }
-  if(tracking.active&&tracking.calibration)for(const h of hands)if(h.tracked&&h.updated)checkContact(h,h.sampleDt,now,'webcam');
-  // Palm-approach detector: primary punch trigger. Doesn't require guard calibration
-  // and covers both fists and open palms.
-  if(tracking.active&&tracking.results&&tracking.results.timestamp!==lastSlapResultTs){
-    lastSlapResultTs=tracking.results.timestamp;
-    const trigger=slapDetector.observe(tracking.results.landmarks,tracking.results.timestamp);
-    if(trigger)fireSlap(trigger);
-  }
-  updateSlapHud(time);
+  if(tracking.active)for(const h of hands){if(h.tracked&&h.updated)trackStrike(h,time,'webcam');else if(!h.tracked)strikeTracker.reset(h.side);}
   if(dynamics){
     if(!impactHeld){dynamics.step(dt*($('slow-motion').checked?.38:1));
       if(watchPeak&&$('hold-peak').checked&&previousDisplacement>.0005&&dynamics.impactRig.hasPeaked&&dynamics.maxDisplacement<previousDisplacement){impactHeld=true;watchPeak=false;}
@@ -362,23 +248,15 @@ function frame(time){
   for(const h of hands){
     const arm=scannedArms.get(h.side<0?'left':'right');
     if(arm)arm.updateFromHand(h);
-    // Neon line skeleton shows whenever no scanned arm has taken over.
     h.line.visible=!arm;
   }
+  if(!scannedArms.size)$('view-label').textContent='FIRST-PERSON · TRACKING WIREFRAMES';
   if(scannedArms.size&&normalClock%15===0){
     const visible=[...scannedArms].filter(([,arm])=>arm.visible).map(([side])=>side);
     $('arm-appearance').textContent=!tracking.active?'Captured arms loaded. Connect the webcam to drive them.':!tracking.bodyFrame?'Captured arms loaded. Calibrate with your face, shoulders, elbows and wrists visible.':visible.length?`Following your ${visible.join(' and ')} arm. Capture proportions retained; pose and skin weights are estimates.`:'Personal arms hidden: show the matching shoulder, elbow, wrist and hand clearly.';
     $('view-label').textContent='FIRST-PERSON · CAPTURED ARM MESHES';
   }
-  controls.update();renderer.render(scene,camera);frames++;
-  if(time-fpsTime>750){
-    $('fps').textContent=Math.round(frames*1000/(time-fpsTime));
-    // CV = frame-posted-to-worker → deformation-visible, in ms. Under the low-latency stack
-    // this is dominated by GPU-delegate inference (~10 ms) + render tick (~8 ms).
-    if(tracking.active&&tracking.results)$('cv-latency').textContent=Math.round(Math.max(0,time-tracking.results.timestamp));
-    else $('cv-latency').textContent='—';
-    frames=0;fpsTime=time;
-  }
+  controls.update();renderer.render(scene,camera);
 }
 renderer.setAnimationLoop(frame);
 new ResizeObserver(()=>{const {width,height}=$('stage').getBoundingClientRect();renderer.setSize(width,height);camera.aspect=width/height;camera.updateProjectionMatrix();}).observe($('stage'));
@@ -390,7 +268,7 @@ $('undo').onclick=()=>{if(dynamics?.undo())revision++;};$('redo').onclick=()=>{i
 for(const key of ['jaw','smile','brow','squint'])$(key).oninput=()=>{if(dynamics)dynamics.rig[key]=Number($(key).value);if($(key+'-value'))$(key+'-value').textContent=Math.round(Number($(key).value)*100)+'%';};
 $('resume-impact').onclick=()=>{impactHeld=false;watchPeak=false;};
 $('softness').oninput=()=>{if(dynamics)dynamics.softness=Number($('softness').value);$('softness-value').textContent=Math.round(Number($('softness').value)*100)+'%';};
-$('distance').oninput=()=>{target.position.z=-Number($('distance').value);$('distance-value').textContent=Math.round(Number($('distance').value)*100)+' cm';};
+$('distance').oninput=()=>{const distance=Number($('distance').value);target.position.z=-distance;tracking.setTargetDistance(distance);strikeTracker.reset();$('distance-value').textContent=Math.round(distance*100)+' cm';};
 $('left-hook').onclick=()=>hook(-1);$('right-hook').onclick=()=>hook(1);$('reset').onclick=()=>{impactHeld=false;watchPeak=false;dynamics?.reset();for(const id of ['jaw','smile','brow','squint']){$(id).value=0;if($(id+'-value'))$(id+'-value').textContent='0%';}peak=0;revision++;};$('first-person').onclick=firstPerson;
 $('reference').onclick=reference;$('import-face').onclick=()=>$('face-file').click();
 $('glb-import').onclick=()=>{$('capture-dialog').close();$('face-file').click();};
@@ -408,12 +286,10 @@ renderer.domElement.addEventListener('pointerup',()=>{drag=null;});renderer.domE
 
 const CAMERA_WANTED_KEY='contact-camera-wanted';
 async function cameraToggle(){
-  if(tracking.active){tracking.stop();sessionStorage.removeItem(CAMERA_WANTED_KEY);$('camera').textContent='Connect laptop webcam';$('webcam').classList.remove('active');$('calibrate').disabled=true;$('tracking-status').textContent='Camera off. Virtual hands are in demo mode.';$('stage-status').textContent='● DEMO INPUT';$('slap-preview').srcObject=null;$('slap-hud').classList.remove('active');slapDetector.reset();lastSlapEvent=null;return;}
+  if(tracking.active){tracking.stop();strikeTracker.reset();sessionStorage.removeItem(CAMERA_WANTED_KEY);$('camera').textContent='Connect laptop webcam';$('webcam').classList.remove('active');$('calibrate').disabled=true;$('tracking-status').textContent='Camera off. Virtual hands are in demo mode.';$('stage-status').textContent='● DEMO INPUT';return;}
   $('camera').disabled=true;
   try{
     await tracking.start();demo=null;firstPerson();$('camera').textContent='Disconnect webcam';$('webcam').classList.add('active');$('calibrate').disabled=false;$('stage-status').textContent='● WEBCAM · VIRTUAL POV';
-    // Share the media stream with the HUD preview so the user sees exactly what the detector sees.
-    $('slap-preview').srcObject=tracking.stream;await $('slap-preview').play().catch(()=>{});$('slap-hud').classList.add('active');
     // Persist intent so a Vite HMR reload (this project reloads on every save) can bring
     // the camera back automatically instead of silently dropping the stream on the user.
     sessionStorage.setItem(CAMERA_WANTED_KEY,'1');
@@ -421,7 +297,7 @@ async function cameraToggle(){
   catch(e){toast(`Camera unavailable: ${e.message}`);$('tracking-status').textContent='Camera could not start. Allow camera access in the browser, then reconnect.';sessionStorage.removeItem(CAMERA_WANTED_KEY);}
   finally{$('camera').disabled=false;}
 }
-$('camera').onclick=cameraToggle;$('calibrate').onclick=()=>{try{tracking.calibrate();}catch(e){toast(e.message);}};
+$('camera').onclick=cameraToggle;$('calibrate').onclick=()=>{try{tracking.calibrate();strikeTracker.reset();}catch(e){toast(e.message);}};
 // Auto-reconnect after HMR reloads. getUserMedia proceeds without a fresh user gesture once
 // this document has already been granted camera permission, so the reconnect is silent.
 if(sessionStorage.getItem(CAMERA_WANTED_KEY)==='1')queueMicrotask(()=>cameraToggle().catch(()=>{}));
@@ -507,7 +383,7 @@ async function restoreSession(data){
   sourceName=data.name||'Saved face';photoData=data.photo??null;sourceBytes=null;
   installMesh(g,mat,data.stats);if(data.original?.length===dynamics.rest.length&&data.original.every(Number.isFinite))dynamics.original=new Float32Array(data.original);
   for(const key of ['jaw','smile','brow','squint']){dynamics.rig[key]=clamp(Number(data.rig?.[key])||0,0,1);$(key).value=dynamics.rig[key];if($(key+'-value'))$(key+'-value').textContent=Math.round(dynamics.rig[key]*100)+'%';}
-  $('distance').value=clamp(Number(data.distance)||.55,.35,.8);$('distance').oninput();$('face-yaw').value=Number(data.yaw)||0;$('face-pitch').value=Number(data.pitch)||0;$('softness').value=clamp(Number(data.softness)||.6,0,1);$('softness').oninput();
+  $('distance').value=clamp(Number(data.distance)||.30,.24,.8);$('distance').oninput();$('face-yaw').value=Number(data.yaw)||0;$('face-pitch').value=Number(data.pitch)||0;$('softness').value=clamp(Number(data.softness)||.6,0,1);$('softness').oninput();
   $('model-kind').textContent='Restored editable session';
   if(data.appearanceAtlas&&mat.map){surfaceAppearance=new SurfaceAppearance(mesh.geometry,data.appearanceAtlas,mat.map.clone(),roughnessTexture);headPivot.add(surfaceAppearance);setView('mesh');$('model-kind').textContent='Restored textured mesh · welded physics';}
   if(data.physics?.id){const old=dynamics;dynamics=new NewtonFaceDynamics(mesh.geometry,data.physics.binding,data.physics.cage,physicsStatus);dynamics.rest=old.rest;dynamics.original=old.original;dynamics.rig=old.rig;capturedFaceId=data.physics.id;await dynamics.connect(capturedFaceId);}
@@ -586,10 +462,7 @@ $('fullscreen').onclick=()=>{document.body.classList.toggle('immersive');const o
 
 // Read-only diagnostics and deterministic fixture interactions for browser QA.
 window.__punchingFace={get state(){return {ready:!!mesh,representation,impacts,lastSpeed,revision,vertices:mesh?.geometry.attributes.position.count,triangles:mesh?.geometry.index.count/3,maxDisplacement:dynamics?.maxDisplacement,peak,rig:dynamics?{...dynamics.rig}:{},hair:headHair?{visible:headHair.visible,strands:headHair.strandCount,type:headHair.spec.parameters.type,parameters:headHair.spec.parameters,vertices:headHair.geometry.attributes.position.count}:null,glasses:headGlasses?{visible:headGlasses.visible,meshes:headGlasses.children.length,source:headGlasses.spec.source}:null,cameraActive:tracking.active,calibrated:!!tracking.calibration,trackedHands:hands.filter(h=>h.tracked).length,lastTrackingTimestamp:tracking.appliedTimestamp,bodyTracking:{ready:!!tracking.poseReady,poseTimestamp:tracking.results?.pose?.timestamp,bodyCalibrated:!!tracking.bodyFrame,orientation:tracking.bodyFrame?.orientationSource,visiblePersonalArms:[...scannedArms].filter(([,arm])=>arm.visible).map(([side])=>side)},stats,physics:dynamics?.physicsInfo,physicsMetrics:dynamics?.lastMetrics,physicsError:dynamics?.error,impactHeld,regions:dynamics?.regionPeaks,scannedArms:[...scannedArms.keys()],mode,room:!!roomSplat||!!roomTexture};},get appearance(){return surfaceAppearance?{vertices:surfaceAppearance.mapping.length,textureSize:surfaceAppearance.material.map.image.width}:null;},get positions(){return mesh?.geometry.attributes.position.array.slice();},get rest(){return dynamics?.rest.slice();},sessionData,restoreSession,
-get slap(){return {state:slapDetector.state,tuning:slapDetector.tuning,lastEvent:lastSlapEvent};},
-tuneSlap(patch){Object.assign(slapDetector.tuning,patch);},
-// Direct injection of a synthetic landmark stream. Frames = array of {t, landmarks}.
-feedSlap(frames){slapDetector.reset();lastSlapEvent=null;const out=[];for(const f of frames){const trig=slapDetector.observe(f.landmarks,f.t);if(trig)fireSlap(trig);out.push({t:f.t,reason:slapDetector.state.reason,triggered:trig});}return out;}};
+get strike(){return hands.map(hand=>({hand:hand.side,phase:strikeTracker.state(hand.side),tracked:hand.tracked,calibrated:hand.calibrated}));}};
 firstPerson();
 const recovery=sessionStorage.getItem('punching-face-dev-recovery');
 async function recover(){
@@ -665,16 +538,6 @@ function sliceBust(g){
 // cheeks, mouth) live on this specific mesh and hand those positions to the impact rig. Then the
 // rig anchors follow the mesh instead of the mesh being forced to fit the anchors.
 const REFERENCE_HEAD_HEIGHT=0.28;
-function normalizeHead(g){
-  g.computeBoundingBox();
-  const b=g.boundingBox,sz=new THREE.Vector3();b.getSize(sz);
-  if(sz.y<1e-6)return;
-  const c=b.getCenter(new THREE.Vector3()),scale=REFERENCE_HEAD_HEIGHT/sz.y;
-  g.translate(-c.x,-c.y,-c.z);
-  g.scale(scale,scale,scale);
-  g.computeVertexNormals();
-  g.computeBoundingBox();
-}
 // Walk the mesh geometry to find facial landmarks. Assumes normalizeHead has been run so the mesh
 // is bbox-centered at origin, Y-up, face at +Z. Returns anchors keyed the same way as the rig's
 // hardcoded defaults so FaceImpactRig.setAnchors just accepts them.
@@ -682,27 +545,29 @@ function detectAnchors(g){
   const pos=g.attributes.position,N=pos.count;
   g.computeBoundingBox();
   const b=g.boundingBox;
+  // Ignore any retained torso below the normalized head window.
+  const headBottom=Math.max(b.min.y,b.max.y-REFERENCE_HEAD_HEIGHT*1.08),headHeight=b.max.y-headBottom;
   // Nose tip = front-most vertex, ignoring hair fringe (only look above chin height, below brow).
-  const yMid=(b.min.y+b.max.y)/2;
   let noseIdx=-1,noseZ=-Infinity;
   for(let i=0;i<N;i++){
     const y=pos.getY(i);
-    if(y<b.min.y+(b.max.y-b.min.y)*0.30||y>b.max.y-(b.max.y-b.min.y)*0.25)continue;
+    if(y<headBottom+headHeight*.25||y>b.max.y-headHeight*.18)continue;
     const z=pos.getZ(i);
     if(z>noseZ){noseZ=z;noseIdx=i;}
   }
   if(noseIdx<0){noseIdx=0;for(let i=0;i<N;i++)if(pos.getZ(i)>pos.getZ(noseIdx))noseIdx=i;noseZ=pos.getZ(noseIdx);}
   const noseX=pos.getX(noseIdx),noseY=pos.getY(noseIdx);
   // Chin = lowest Y among front-facing vertices near the midline (X close to nose X).
-  const frontThreshold=noseZ*0.55;
-  let chinY=Infinity,chinZ=noseZ*0.6;
+  const frontThreshold=b.min.z+(noseZ-b.min.z)*.55;
+  let chinY=Infinity,chinZ=frontThreshold;
   for(let i=0;i<N;i++){
     const z=pos.getZ(i); if(z<frontThreshold)continue;
     if(Math.abs(pos.getX(i)-noseX)>0.05)continue;
     const y=pos.getY(i);
+    if(y<headBottom)continue;
     if(y<chinY){chinY=y;chinZ=z;}
   }
-  if(!isFinite(chinY))chinY=b.min.y;
+  if(!isFinite(chinY))chinY=headBottom;
   // Face height = chin-to-brow. Nose sits roughly halfway between chin and brow, so brow ≈ 2*(nose - chin) + chin.
   const faceH=Math.max(0.05, 2*(noseY-chinY));
   const eyeY=chinY+faceH*0.62;   // eyeline
@@ -711,8 +576,9 @@ function detectAnchors(g){
   // Cheeks = widest front-facing X at cheek Y level.
   let cheekL=0,cheekR=0;
   const cheekTol=faceH*0.14;
+  const cheekFront=b.min.z+(noseZ-b.min.z)*.45;
   for(let i=0;i<N;i++){
-    if(pos.getZ(i)<frontThreshold*0.85)continue;
+    if(pos.getZ(i)<cheekFront)continue;
     if(Math.abs(pos.getY(i)-cheekY)>cheekTol)continue;
     const x=pos.getX(i);
     if(x<cheekL)cheekL=x;
@@ -790,11 +656,9 @@ $('beat-yourself').onclick=async()=>{
   if(!meshyState.lastGLB){await meshyBuildFromPhoto();if(!meshyState.lastGLB)return;}
   else{busy(true,'Loading your Meshy head…');try{const bytes=await maybeCompressGLB(meshyState.lastGLB);await loadMeshyGLB(bytes);}catch(e){toast(e.message);return;}finally{busy(false);}}
   firstPerson();
-  // fireSlap ignores the "disconnect webcam" guard on the demo helpers, so the beat-yourself
-  // combo still lands when the user has their camera on for tracking.
-  setTimeout(()=>fireSlap({type:'uppercut',growth:1.4,side:'left'}),300);
-  setTimeout(()=>fireSlap({type:'hook',growth:1.1,side:'left'}),1100);
-  setTimeout(()=>fireSlap({type:'hook',growth:1.1,side:'right'}),1800);
+  setTimeout(()=>scriptedImpact({type:'uppercut',side:'left',speed:2.4}),300);
+  setTimeout(()=>scriptedImpact({type:'hook',side:'left',speed:2.1}),1100);
+  setTimeout(()=>scriptedImpact({type:'hook',side:'right',speed:2.1}),1800);
 };
 
 // LiveKit arena hook (src/sponsors/arena-host.js; guarded by tests/sponsors-hook.test.mjs). A remote

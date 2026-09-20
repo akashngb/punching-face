@@ -52,7 +52,7 @@ export class FaceDynamics {
     this.lastImpact=null;this.regionPeaks={cheeks:0,nose:0,lips:0,forehead:0,jaw:0};
   }
   impulse(point,direction,speed,mode='hook'){
-    this.impactRig.trigger(this.rest,point,direction,speed,this.softness,mode);
+    if(mode!=='body')this.impactRig.trigger(this.rest,point,direction,speed,this.softness,mode);
     let affected=0;
     const radius=.025+this.softness*.021;
     this.lastImpact={point:point.clone(),direction:direction.clone()};

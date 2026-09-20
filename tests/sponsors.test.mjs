@@ -61,10 +61,12 @@ function fist(cx,cy,size){
 const open=(cx,cy,size)=>fist(cx,cy,size).map((q,i)=>[8,12,16,20].includes(i)?{...q,y:q.y-size*.9}:q);
 
 test('a straight punch is a closed fist rushing the camera; waving, open hands and repeats are ignored',()=>{
-  const detector=new PunchDetector();let event=null,time=0;
+  const detector=new PunchDetector({diagnostics:true});let event=null,time=0;
   for(const size of [.10,.10,.10,.125,.16,.20]){event=detector.update('h',fist(.3,.45,size),time+=33)||event;}
   assert.ok(event,'a fist growing 2x in 100 ms is a punch');assert.equal(event.kind,'straight');assert.equal(event.side,'right');
   assert.ok(event.u>0,'the thrower\'s right hand lands on the viewer-right of a head facing them');assert.ok(event.speed>=.9&&event.speed<=4);
+  assert.ok(event.screenX>.5&&event.screenY>0&&event.screenY<1,'impact keeps the palm position on the mirrored preview');
+  assert.ok(event.direction.z<0&&Math.abs(Math.hypot(event.direction.x,event.direction.y,event.direction.z)-1)<1e-9,'impact direction is a unit vector into the target');
   assert.equal(detector.update('h',fist(.3,.45,.26),time+=33),null,'cooldown: one punch, one hit');
   const slow=new PunchDetector();let drift=null;for(let i=0;i<30;i++)drift=slow.update('h',fist(.3+i*.002,.45,.10+i*.0005),i*33)||drift;
   assert.equal(drift,null,'slow drift toward the camera is not a punch');
@@ -77,6 +79,7 @@ test('a hook is fast sideways travel and lands on the side it came from, moving 
   const detector=new PunchDetector();let event=null;[.80,.80,.72,.62,.52].forEach((x,i)=>event=detector.update('h',fist(x,.45,.12),i*33)||event);
   assert.ok(event);assert.equal(event.kind,'hook');assert.equal(event.side,'left');
   assert.ok(event.u<0&&event.lateral>0,'a left hook lands viewer-left and travels right');
+  assert.equal(event.direction,undefined,'the normal guest event stays compact');
 });
 
 test('guest messages are clamped, rate limited and tolerant of garbage before touching physics',()=>{

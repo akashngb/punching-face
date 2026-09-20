@@ -15,7 +15,8 @@
     "test:sponsors": ".venv/bin/python tests/sponsor_server_test.py && .venv/bin/python tests/sponsor_obs_test.py",
     "omni:smoke": ".venv/bin/python scripts/omni_smoke_test.py",
     "omni:report": ".venv/bin/python scripts/omni_usage_report.py",
-    "omni:relay": ".venv/bin/python omni_relay.py"
+    "omni:relay": ".venv/bin/python omni_relay.py",
+    "test:ab": "node tests/ab-estimator.mjs"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.5.0",

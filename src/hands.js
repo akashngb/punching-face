@@ -31,6 +31,9 @@ export class VirtualHand extends THREE.Group {
     this.lastHit=-10;
     this.closed=1;
     this.tracked=false;
+    this.calibrated=false;
+    this.confidence=0;
+    this.filteredPoints=null;
     const geometry=new THREE.BufferGeometry();
     geometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(HAND_POSITION_BUFFER_SIZE),3));
     this.line=new THREE.LineSegments(geometry,NEON_HAND_MATERIAL);
@@ -41,6 +44,7 @@ export class VirtualHand extends THREE.Group {
   }
   apply(points,closed,armPose=null){
     this.armPose=armPose;
+    this.points=points;
     this.previous.copy(this.center);
     this.closed=closed;
     this.center.addVectors(points[5],points[17]).multiplyScalar(.5).lerp(points[9],.2);
@@ -57,6 +61,14 @@ export class VirtualHand extends THREE.Group {
     arr[k++]=w.x;arr[k++]=w.y;arr[k++]=w.z;
     arr[k++]=elbow.x;arr[k++]=elbow.y;arr[k++]=elbow.z;
     this.line.geometry.attributes.position.needsUpdate=true;
+  }
+  applyTracked(points,closed,sampleDt,reset=false,armPose=null){
+    if(reset||!this.filteredPoints)this.filteredPoints=points.map(p=>p.clone());
+    else{
+      const alpha=1-Math.exp(-sampleDt/.025);
+      for(let i=0;i<points.length;i++)this.filteredPoints[i].lerp(points[i],alpha);
+    }
+    this.apply(this.filteredPoints,closed,armPose);
   }
   demoPose(center,closed=0){
     // Lerp between open-hand and fist landmark offsets by `closed` so demo triggers curl
@@ -84,7 +96,8 @@ export function segment(mesh,a,b,radius){
 }
 
 export class Tracking {
-  constructor(video,onStatus){this.video=video;this.onStatus=onStatus;this.active=false;this.calibration=null;this.bodyFrame=null;this.armProfiles=new Map();this.guardWidths=[];this.results=null;this.stream=null;this.worker=null;this.busy=false;this.pipelineLatency=0;this.frameCallback=null;}
+  constructor(video,onStatus,{autoCalibrate=false,targetDistance=.30}={}){this.video=video;this.onStatus=onStatus;this.autoCalibrate=autoCalibrate;this.targetDistance=targetDistance;this.active=false;this.calibration=null;this.bodyFrame=null;this.armProfiles=new Map();this.guardWidths=new Map();this.results=null;this.stream=null;this.worker=null;this.busy=false;this.pipelineLatency=0;this.frameCallback=null;}
+  setTargetDistance(distance){if(Number.isFinite(distance))this.targetDistance=distance;}
   setArmProfile(profile){this.armProfiles.set(profile.side,profile);this.calibration=null;this.bodyFrame=null;this.onStatus('Personal arm loaded. Show your face, shoulders, elbows and wrists, then calibrate guard.');this.enableBody().catch(()=>{});}
   async start(){
     this.onStatus('Starting local hand tracking…');
@@ -108,14 +121,14 @@ export class Tracking {
         this.worker.postMessage({type:'init',origin:location.origin});
       });
       this.worker.onmessage=({data})=>{if(data.type==='poseReady'){this.poseReady=true;this.onPoseReady?.();return;}this.busy=false;if(data.type==='result'){this.results=data;this.receivedAt=performance.now();this.pipelineLatency=this.receivedAt-data.timestamp;if(data.capture)this.onCapture?.(data);this.scheduleFrame();}else if(data.type==='error'){this.onStatus(data.message);this.stop();}};
-      this.active=true;this.calibration=null;this.scheduleFrame();
+      this.active=true;this.calibration=this.autoCalibrate?new Map():null;this.guardWidths.clear();this.scheduleFrame();
       // Body/pose tracking is lazy — only spun up when the user actually scans or loads an arm.
       // Eager-loading it here used to add ~30-50 ms per pose frame on top of the hand landmark
       // pipeline for a signal that the default punch flow never reads.
       this.onStatus('Webcam connected · show your face and hands, then calibrate guard');
     }catch(e){this.stop();throw e;}
   }
-  stop(){this.active=false;this.worker?.terminate();this.worker=null;this.busy=false;this.results=null;this.poseReady=false;this.appliedTimestamp=0;this.calibration=null;this.bodyFrame=null;this.captureRequest=null;this.frameCallback=null;this.pipelineLatency=0;this.poseInitReject?.(new Error('Camera disconnected while loading body tracking.'));this.stream?.getTracks().forEach(t=>t.stop());this.video.srcObject=null;}
+  stop(){this.active=false;this.worker?.terminate();this.worker=null;this.busy=false;this.results=null;this.poseReady=false;this.appliedTimestamp=0;this.calibration=null;this.guardWidths.clear();this.bodyFrame=null;this.captureRequest=null;this.frameCallback=null;this.pipelineLatency=0;this.poseInitReject?.(new Error('Camera disconnected while loading body tracking.'));this.stream?.getTracks().forEach(t=>t.stop());this.video.srcObject=null;}
   scheduleFrame(){
     if(!this.active||!this.worker||this.busy||this.frameCallback!==null)return;
     // requestVideoFrameCallback fires the instant a decoded camera frame is ready; no
@@ -139,8 +152,11 @@ export class Tracking {
     const hands=this.results?.landmarks;if(!hands?.length)throw new Error('Show an open hand to the camera before calibrating.');
     const pose=this.results.pose;this.bodyFrame=calibrateBodyFrame(pose?.worldLandmarks?.[0],pose?.landmarks?.[0],[...this.armProfiles.values()]);
     if(this.armProfiles.size&&(!this.bodyFrame||!Number.isFinite(pose.timestamp)||this.results.timestamp-pose.timestamp>180))throw new Error('Personal arms need a clear view of your face, shoulders, elbows and wrists to calibrate.');
-    this.calibration=hands.map(lm=>Math.hypot(lm[5].x-lm[17].x,lm[5].y-lm[17].y)).reduce((a,b)=>a+b,0)/hands.length;
-    this.onStatus(this.armProfiles.size?'Personal proportions calibrated · body and palm tracking drive the captured meshes':'Guard calibrated · close your fist and move across the target');
+    const next=this.calibration instanceof Map?this.calibration:new Map(),assignments=matchHandsToBody(hands,pose?.landmarks?.[0],this.video.videoWidth/this.video.videoHeight||1);
+    hands.forEach((lm,i)=>{const matched=assignments.get(i),side=matched?(matched==='left'?-1:1):(this.results.handedness?.[i]?.[0]?.categoryName==='Left'?1:-1);next.set(side,Math.hypot(lm[5].x-lm[17].x,lm[5].y-lm[17].y));});
+    this.calibration=next;
+    const label=[...next.keys()].sort().map(side=>side<0?'left':'right').join(' + ');
+    this.onStatus(this.armProfiles.size?'Personal proportions calibrated · body and palm tracking drive the captured meshes':`${label} guard calibrated · close your fist and strike the target`);
   }
   async enableBody({wantSegmentation=false}={}){if(this.poseReady)return;if(!this.active)throw new Error('Connect your webcam first.');if(this.poseInitPromise)return this.poseInitPromise;
     this.poseInitPromise=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Body model initialization timed out.')),25000);this.poseInitReject=e=>{clearTimeout(timer);reject(e);};this.onPoseReady=()=>{clearTimeout(timer);resolve();};this.worker.postMessage({type:'enablePose',wantSegmentation});}).finally(()=>{this.poseInitPromise=null;this.poseInitReject=null;this.onPoseReady=null;});return this.poseInitPromise;
@@ -151,10 +167,7 @@ export class Tracking {
     // Ingest is driven by requestVideoFrameCallback in scheduleFrame(); tick() only
     // applies the latest inference result to the hand rigs.
     this.scheduleFrame();
-    // Only fully hide a hand when tracking has been silent for >1 s. Between-frame gaps of a few
-    // hundred ms happen constantly with MediaPipe — flipping visible on/off each of those gaps
-    // is what caused the on-screen skeleton to strobe.
-    if(!this.results||now-this.results.timestamp>1000){for(const h of hands){h.tracked=false;h.visible=false;h.armPose=null;}return;}
+    if(!this.results||now-this.results.timestamp>350){for(const h of hands){h.tracked=false;h.visible=false;h.armPose=null;h.filteredPoints=null;h.calibrated=false;}return;}
     if(this.appliedTimestamp===this.results.timestamp)return;
     const sampleDt=this.appliedTimestamp?clamp((this.results.timestamp-this.appliedTimestamp)/1000,1/60,.15):1/30;
     this.appliedTimestamp=this.results.timestamp;
@@ -174,20 +187,23 @@ export class Tracking {
       if(profile){
         if(!matched||!body||!Number.isFinite(body.timestamp)||this.results.timestamp-body.timestamp>180)return;
         const pose=retargetCapturedArm(profile,this.bodyFrame,body.worldLandmarks?.[0],body.landmarks?.[0],this.results.worldLandmarks?.[i]);if(!pose)return;
-        h.visible=true;h.tracked=true;h.apply(pose.joints.slice(3),fistScore(lm),pose);h.sampleDt=sampleDt;h.updated=previouslyTracked.get(h.side)===true;if(!h.updated)h.previous.copy(h.center);return;
+        h.visible=true;h.tracked=true;h.calibrated=true;h.confidence=this.results.handedness?.[i]?.[0]?.score??1;h.updated=previouslyTracked.get(h.side)===true;h.applyTracked(pose.joints.slice(3),fistScore(lm),sampleDt,!h.updated,pose);h.sampleDt=sampleDt;if(!h.updated)h.previous.copy(h.center);return;
       }
       const width=Math.hypot(lm[5].x-lm[17].x,lm[5].y-lm[17].y);
-      const ratio=this.calibration?width/this.calibration:1;
-      // Rest is now ~48 cm from the origin camera so hands hover close to the face at z=-0.55
-      // instead of near the lens. A moderate punch (ratio ≈ 1.2) lands past the face; a big
-      // reach (ratio ≈ 1.5) drives the mesh through it. Floor 0.38 keeps recovery well inside
-      // the near-fade's opaque band so the hand never sits inside the camera's near plane.
-      const depth=clamp(.48+(ratio-1)*.35,.38,.85);
+      if(this.autoCalibrate&&this.calibration instanceof Map&&!this.calibration.has(side)){
+        const samples=this.guardWidths.get(side)??[];samples.push(width);this.guardWidths.set(side,samples);
+        if(samples.length>=6)this.calibration.set(side,samples.reduce((sum,value)=>sum+value,0)/samples.length);
+      }
+      const guardWidth=this.calibration instanceof Map?this.calibration.get(side):null,ratio=guardWidth?width/guardWidth:1;
+      // Monocular Z is only a calibrated interaction proxy: palm growth moves the
+      // rendered fist from guard toward the same target distance used by collision.
+      const guardDepth=Math.max(.12,this.targetDistance-.20);
+      const depth=clamp(guardDepth+(ratio-1)*.45,.10,this.targetDistance+.25);
       const base=new THREE.Vector3((.5-centerX)*.85,clamp((.55-lm[9].y)*.65,-.30,.16),-depth);
       const unit=.075/Math.max(width,.025);
       const points=lm.map(p=>new THREE.Vector3(base.x-(p.x-centerX)*unit,base.y-(p.y-lm[9].y)*unit,base.z+(p.z-lm[9].z)*unit));
-      h.visible=true;h.tracked=true;h.apply(points,fistScore(lm));h.sampleDt=sampleDt;
       h.updated=previouslyTracked.get(h.side)===true;
+      h.visible=true;h.tracked=true;h.calibrated=!!guardWidth;h.confidence=this.results.handedness?.[i]?.[0]?.score??1;h.applyTracked(points,fistScore(lm),sampleDt,!h.updated);h.sampleDt=sampleDt;
       if(!h.updated)h.previous.copy(h.center);
     });
   }

@@ -1,4 +1,5 @@
 // Contact classifier (OMNI.md §5.1).
+import {impactIntensity} from '../strike-system.js';
 //
 // Turns the existing per-frame contact stream (from main.js contact()) into
 // typed events:
@@ -22,6 +23,8 @@ const RELEASE_THRESHOLD_MS = 120;     // if no observe() for this long, treat as
 const PRESS_DWELL_MS = 180;           // observe() this long before we call it a press
 const STRIKE_MIN_SPEED = 1.5;         // m/s
 const REBOUND_WINDOW_MS = 350;        // release speed above threshold within N ms of press-end
+
+export const forceFromSpeed = impactIntensity;
 
 export class ContactClassifier {
   constructor({regionFromPoint, onEvent}) {
@@ -47,7 +50,7 @@ export class ContactClassifier {
   strike(contact) {
     const region = contact.region ?? this._regionFromPoint(contact.point);
     if (!region) return null;
-    const force = contact.force ?? Math.min(100, Math.max(0, (contact.speed || 0) * 32));
+    const force = contact.force ?? forceFromSpeed(contact.speed);
     // Debounce: two strikes on the same region within 80 ms are the same hit.
     // Use `has()` rather than a numeric sentinel — `performance.now()` starts
     // near zero in Node, which would falsely eat the very first strike.
