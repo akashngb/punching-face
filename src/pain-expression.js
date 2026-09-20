@@ -35,6 +35,39 @@ export class PainExpression {
   }
 
   build(anchors, point, magnitude) {
+    this.prepare(anchors);
+    const { mouth, scale, left, right } = this.basis;
+    const side = clamp((point[0] - mouth[0]) / (0.035 * scale), -1, 1);
+    const front = smooth(mouth[2] - 0.085 * scale, mouth[2] - 0.025 * scale, point[2]);
+    const strength = Math.pow(magnitude, 0.8) * front;
+    const blend = (side + 1) * 0.5;
+    const field = new Float32Array(left.length);
+    for (let i = 0; i < field.length; i++)
+      field[i] = (left[i] * (1 - blend) + right[i] * blend) * strength;
+    return field;
+  }
+
+  prepare(anchors) {
+    const key = JSON.stringify(anchors);
+    if (this.basis?.key === key) return;
+    const mouth = anchors[13].map((x, j) => (x + anchors[14][j]) * 0.5);
+    const scale = clamp((mouth[1] - anchors[152][1]) / 0.06, 0.65, 1.6);
+    // The authored expression is affine in contact side and linear in strength.
+    // Two double-precision endpoints reproduce it without per-hit Gaussian work.
+    const left = this.buildBasis(
+      anchors,
+      [mouth[0] - 0.035 * scale, mouth[1], mouth[2]],
+      1,
+    );
+    const right = this.buildBasis(
+      anchors,
+      [mouth[0] + 0.035 * scale, mouth[1], mouth[2]],
+      1,
+    );
+    this.basis = { key, mouth, scale, left, right };
+  }
+
+  buildBasis(anchors, point, magnitude) {
     const a = { ...anchors },
       { rest, map, vertices } = this.tissue;
     // Photo heads reserve the first 468 *unrendered* semantic cage landmarks.
@@ -54,7 +87,7 @@ export class PainExpression {
       point[2],
     );
     const strength = Math.pow(magnitude, 0.8) * frontContact;
-    const field = new Float32Array(rest.length);
+    const field = new Float64Array(rest.length);
     const gaussian = (p, c, rx, ry, rz) =>
       Math.exp(
         -p.reduce((s, x, j) => s + ((x - c[j]) / ([rx, ry, rz][j] * scale)) ** 2, 0),

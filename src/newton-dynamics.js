@@ -31,7 +31,7 @@ function physicsClient() {
 // correctives over it, as well as the independent manual expression controls.
 export class NewtonFaceDynamics extends FaceDynamics {
   constructor(geometry, binding, cage, onStatus) {
-    super(geometry);
+    super(geometry, { asyncImpacts: false });
     this.binding = binding;
     this.cage = cage;
     this.onStatus = onStatus;
@@ -59,7 +59,16 @@ export class NewtonFaceDynamics extends FaceDynamics {
     )
       throw new Error('Invalid face cage weights.');
     this.anchors = cage.rigAnchors;
+    // Camera/button targets use cage vertices; the facial-expression anchors
+    // can be fitted differently. Warm the same contacts as rigGoal().
+    this.impactRig.contactAnchors = Object.fromEntries(
+      [1, 50, 152, 280].map((index) => [
+        index,
+        Array.from(cage.positions.slice(index * 3, index * 3 + 3)),
+      ]),
+    );
     this.impactRig.setAnchors(this.anchors);
+    this.enableAsyncImpacts();
     this.speechRig.setAnchors(this.anchors);
   }
 
@@ -84,6 +93,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
       });
       this.session = result.session;
       this.physicsInfo = result;
+      await this.impactRig.preparer?.ready;
       if (this.disposed) {
         await this.dispose();
         return;
@@ -254,16 +264,16 @@ export class NewtonFaceDynamics extends FaceDynamics {
       void this.advance(elapsed);
     }
     const p = this.geometry.attributes.position.array,
+      pose = this.poseOffsets(),
       blend = 1 - Math.exp(-dt * 65);
     this.maxDisplacement = 0;
     for (const k in this.regionPeaks) this.regionPeaks[k] = 0;
     for (let i = 0; i < p.length; i += 3) {
-      const r = this.rigDelta(this.rest[i], this.rest[i + 1], this.rest[i + 2]);
       for (let j = 0; j < 3; j++) {
         this.offset[i + j] += (this.targetOffset[i + j] - this.offset[i + j]) * blend;
         p[i + j] =
           this.rest[i + j] +
-          r[j] +
+          pose[i + j] +
           this.offset[i + j] +
           this.impactRig.offset[i + j] +
           this.speechRig.offset[i + j];
@@ -310,6 +320,7 @@ export class NewtonFaceDynamics extends FaceDynamics {
   }
 
   async dispose() {
+    super.dispose();
     this.disposed = true;
     this.ready = false;
     if (this.session) {

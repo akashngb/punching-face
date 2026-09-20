@@ -2061,6 +2061,7 @@ async function restoreSession(data) {
     $('model-kind').textContent = 'Restored textured mesh · welded physics';
   }
   if (data.physics?.id) {
+    dynamics?.dispose?.();
     const old = dynamics;
     dynamics = new NewtonFaceDynamics(
       mesh.geometry,
@@ -2218,6 +2219,7 @@ async function loadPhotoFace(id) {
     sessionStorage.setItem('punching-face-active-capture', id);
     installGlasses(data.accessories?.glasses);
     installHair(data.accessories?.hair);
+    dynamics?.dispose?.();
     dynamics = new NewtonFaceDynamics(mesh.geometry, binding, cage, physicsStatus);
     dynamics.softness = Number($('softness').value);
     fitMouth(!!cage.rigAnchors);

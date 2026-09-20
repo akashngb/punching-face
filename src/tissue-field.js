@@ -1,4 +1,4 @@
-import {SurfaceValidity} from './surface-validity.js';
+import { SurfaceValidity } from './surface-validity.js';
 // Surface-connected, seam-welded tissue field. Parameters are animation controls,
 // not material measurements. See docs/IMPACT_RIG.md for sources and limits.
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -106,7 +106,9 @@ export class TissueField {
       v.n = length > 1e-8 ? v.n.map((x) => x / length) : [0, 0, 1];
     });
   }
-  get validity(){return this._validity??=new SurfaceValidity(this);}
+  get validity() {
+    return (this._validity ??= new SurfaceValidity(this));
+  }
   nearest(location, positions = this.rest) {
     let index = 0,
       best = Infinity;
@@ -193,8 +195,9 @@ export class TissueField {
     };
   }
   build(seed, direction, magnitude, softness, anchors) {
+    const materials = this.prepareAnatomy(anchors);
     const source = this.vertices[seed],
-      material = this.anatomy(source.p, anchors),
+      material = materials[seed],
       s = material.scale;
     const normal = source.n.slice();
     if (normal.reduce((v, x, j) => v + x * direction[j], 0) > 0)
@@ -210,7 +213,7 @@ export class TissueField {
     this.vertices.forEach((v, i) => {
       const d = distance[i];
       if (!Number.isFinite(d)) return;
-      const local = this.anatomy(v.p, anchors);
+      const local = materials[i];
       const core = Math.exp(-((d / (radius * 0.7)) ** 2)),
         broad =
           Math.exp(-((d / (radius * 1.6)) ** 2)) *
@@ -285,6 +288,15 @@ export class TissueField {
     }
   }
 
+  prepareAnatomy(anchors) {
+    const key = JSON.stringify(anchors);
+    if (key !== this.anatomyKey) {
+      this.materials = this.vertices.map((v) => this.anatomy(v.p, anchors));
+      this.anatomyKey = key;
+    }
+    return this.materials;
+  }
+
   expand(values) {
     const out = new Float32Array(this.rest.length);
     for (let v = 0; v < this.map.length; v++)
@@ -329,12 +341,15 @@ export class TissueField {
     };
   }
   fitIncrement(base, increment) {
-    if(!increment.some(v=>v!==0))return;
-    if(!base.some(v=>v!==0)){this.validity.constrain(increment);return;} // also protect the first retained damage field
+    if (!increment.some((v) => v !== 0)) return;
+    if (!base.some((v) => v !== 0)) {
+      this.validity.constrain(increment);
+      return;
+    } // also protect the first retained damage field
     const total = new Float32Array(base.length);
     for (let i = 0; i < total.length; i++) total[i] = base[i] + increment[i];
     this.constrainAccumulation(total, MAX_PERMANENT_DISPLACEMENT, 0.86, false);
-    this.validity.constrainRelative(total,base,MAX_PERMANENT_DISPLACEMENT);
+    this.validity.constrainRelative(total, base, MAX_PERMANENT_DISPLACEMENT);
     for (let i = 0; i < increment.length; i++) increment[i] = total[i] - base[i];
   }
   constrainAccumulation(field, limit = 0.055, gradient = 0.88, protectArea = true) {
@@ -353,6 +368,6 @@ export class TissueField {
       if (length > limit) for (let j = 0; j < 3; j++) values[i + j] *= limit / length;
     }
     field.set(this.expand(values));
-    if(protectArea)this.validity.constrain(field);
+    if (protectArea) this.validity.constrain(field);
   }
 }

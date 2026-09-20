@@ -22,8 +22,11 @@ export class FaceImpactRig {
     this.mode = 'live';
     this.reactionEnabled = true;
     this.setAnchors(anchors);
-    if (topology)
+    if (topology) {
+      this.topology = topology;
       this.tissue = new TissueField(rest, topology.indices, topology.normals);
+      this.prepare();
+    }
   }
 
   setAnchors(anchors) {
@@ -39,6 +42,50 @@ export class FaceImpactRig {
       386: [0.035, 0.037, 0.065],
       ...anchors,
     };
+    if (this.tissue) this.prepare();
+    this.preparer?.configure(this.preparationModel());
+  }
+
+  preparationModel() {
+    return {
+      rest: this.tissue.rest,
+      anchors: this.anchors,
+      contactAnchors: this.contactAnchors,
+      topology: this.topology,
+    };
+  }
+
+  enableAsync(makePreparation) {
+    if (typeof Worker === 'undefined' || !this.tissue || this.preparer) return;
+    try {
+      this.preparer = makePreparation(this.preparationModel());
+    } catch {
+      /* Synchronous fallback. */
+    }
+  }
+
+  cancelPreparation() {
+    this.preparer?.invalidate();
+  }
+
+  restEdited() {
+    // A sculpted/restored rest buffer no longer matches the worker snapshot.
+    // Preserve the existing ordered sculpt path until a new head is loaded.
+    this.asyncRestEdited = true;
+    this.cancelPreparation();
+  }
+
+  dispose() {
+    this.preparer?.dispose();
+  }
+
+  prepare() {
+    this.gradientRig ??= new DeformationGradientRig(this.tissue);
+    this.painExpression ??= new PainExpression(this.tissue);
+    this.tissue.prepareAnatomy(this.anchors);
+    this.painExpression.prepare(this.anchors);
+    // Build the triangle guard while the model is loading, not on its first hit.
+    void this.tissue.validity;
   }
 
   // Smooth onset, a readable compression crest, then a damped recovery.
@@ -75,14 +122,80 @@ export class FaceImpactRig {
   setMode(mode) {
     if (!['clay', 'live'].includes(mode))
       throw new RangeError('Head mode must be clay or live.');
+    if (mode !== this.mode) this.cancelPreparation();
     this.mode = mode;
   }
 
-  impact(rest, input, softness, positions = rest) {
+  impact(rest, input, softness, positions = rest, { refine = true } = {}) {
     const p = impactParameters(input);
     if (p.magnitude === 0) return 0;
     const hit = this.tissue.nearest(p.location, positions);
     if (hit.distance > 0.045) return 0;
+    if (
+      this.preparer &&
+      !this.asyncRestEdited &&
+      !this.preparer.failed &&
+      this.mode === 'live' &&
+      p.magnitude <= 0.9 &&
+      !this.permanent.some((v) => v !== 0) &&
+      !this.events.some((e) => e.plastic?.some((v) => v !== 0))
+    ) {
+      // A live contact without retained damage is independent of other live
+      // endpoints. Prepare the identical fields off-thread; recoil/Newton and
+      // camera processing can respond immediately. Capture the selected rest
+      // node so moving skin cannot change the contact while work is queued.
+      const input = { ...p, location: this.tissue.vertices[hit.node].p };
+      const queuedAt = performance.now();
+      let previewEvent = null,
+        previewMs = null;
+      const queued = this.preparer.request(
+        input,
+        softness,
+        this.reactionEnabled,
+        (result) => {
+          if (result.error) {
+            if (previewEvent)
+              this.events = this.events.filter((event) => event !== previewEvent);
+            this.preparer.fail();
+            this.impact(rest, input, softness);
+            return;
+          }
+          if (!result.event || !result.affected) return;
+          if (result.stage === 'preview') {
+            previewMs = performance.now() - queuedAt;
+            previewEvent = result.event;
+            this.events.push(previewEvent);
+          } else if (previewEvent && this.events.includes(previewEvent)) {
+            const from = {
+              target: previewEvent.target,
+              reactionTarget: previewEvent.reactionTarget,
+              combinedTarget: previewEvent.combinedTarget,
+            };
+            const { age, committed } = previewEvent;
+            Object.assign(previewEvent, result.event, {
+              age,
+              committed,
+              refinement: { from, elapsed: 0 },
+            });
+          } else if (!previewEvent) this.events.push(result.event);
+          else return; // Never revive an expired preview after a delayed solve.
+          if (this.events.length > 12) this.events.shift();
+          this.lastImpact = {
+            ...result.impact,
+            preparationMs: result.milliseconds,
+            readyMs: performance.now() - queuedAt,
+            previewMs,
+            stage: result.stage,
+            cached: !!result.cached,
+            worker: true,
+          };
+        },
+      );
+      return queued ? this.tissue.vertices[hit.node].copies.length : 0;
+    }
+    // A damaging contact changes the base for every pending endpoint. Cancel
+    // those jobs before applying it so an old response cannot erase a dent.
+    this.cancelPreparation();
     const result = this.tissue.build(
       hit.node,
       p.direction,
@@ -127,7 +240,7 @@ export class FaceImpactRig {
     // Integrate bounded local triangle transforms into one connected face.
     // Built lazily, shared by all contact directions, with no per-frame solve.
     this.gradientRig ??= new DeformationGradientRig(this.tissue);
-    this.gradientRig.refine(result.field);
+    if (refine) this.gradientRig.refine(result.field);
     this.tissue.constrainAccumulation(result.field);
     const permanent = (this.mode === 'clay' ? result.field : result.damage).slice();
     const reserved = this.permanent.slice();
@@ -186,7 +299,7 @@ export class FaceImpactRig {
     this.lastImpact = {
       ...p,
       regionBoneWeight: result.material.bone,
-      gradientSolve: this.gradientRig.lastSolve,
+      gradientSolve: refine ? this.gradientRig.lastSolve : null,
       painReaction: !!reaction,
       affected: result.affected,
     };
@@ -208,6 +321,7 @@ export class FaceImpactRig {
 
   restore(data) {
     if (!data) return;
+    this.cancelPreparation();
     this.setMode(data.mode ?? 'live');
     if (
       !Array.isArray(data.permanent) ||
@@ -432,6 +546,12 @@ export class FaceImpactRig {
       const elapsed = Number.isFinite(dt) ? Math.max(0, dt) : 0;
       for (const e of this.events) {
         e.age += elapsed;
+        if (e.refinement) {
+          e.refinement.elapsed += elapsed;
+          // A held peak still adopts the finished shape even though simulation
+          // time is paused; otherwise it would remain on the preview forever.
+          if (elapsed === 0 || e.refinement.elapsed >= 0.04) e.refinement = null;
+        }
         const onset = smooth(0, 0.12, e.age),
           delta = onset - e.committed;
         for (let i = 0; i < this.permanent.length; i++)
@@ -454,12 +574,28 @@ export class FaceImpactRig {
         weights.reduce((a, b) => a + b[0] + b[1] + b[2], 0),
       );
       live.forEach((e, index) => {
+        const from = e.refinement?.from;
+        const mix = from ? smooth(0, 0.04, e.refinement.elapsed) : 1;
         for (let i = 0; i < this.offset.length; i++)
           this.offset[i] +=
-            ((e.target[i] - this.permanent[i]) * weights[index][0] +
+            (((from
+              ? from.target[i] + (e.target[i] - from.target[i]) * mix
+              : e.target[i]) -
+              this.permanent[i]) *
+              weights[index][0] +
               (e.reaction
-                ? (e.combinedTarget[i] - this.permanent[i]) * weights[index][1] +
-                  (e.reactionTarget[i] - this.permanent[i]) * weights[index][2]
+                ? ((from
+                    ? from.combinedTarget[i] +
+                      (e.combinedTarget[i] - from.combinedTarget[i]) * mix
+                    : e.combinedTarget[i]) -
+                    this.permanent[i]) *
+                    weights[index][1] +
+                  ((from
+                    ? from.reactionTarget[i] +
+                      (e.reactionTarget[i] - from.reactionTarget[i]) * mix
+                    : e.reactionTarget[i]) -
+                    this.permanent[i]) *
+                    weights[index][2]
                 : 0)) /
             normalization;
       });
@@ -484,6 +620,7 @@ export class FaceImpactRig {
   }
 
   reset() {
+    this.cancelPreparation();
     this.events = [];
     this.offset.fill(0);
     this.permanent.fill(0);

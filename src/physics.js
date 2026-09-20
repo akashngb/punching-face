@@ -3,6 +3,7 @@ import { SkinConstraints } from './skin-constraints.js';
 import { FaceImpactRig } from './impact-rig.js';
 import { impactParameters, DEFAULT_SOFTNESS } from './tissue-field.js';
 import { FaceSpeechRig } from './speech-rig.js';
+import { ImpactPreparation } from './impact-preparation.js';
 
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
@@ -41,7 +42,7 @@ export function fistScore(lm) {
 
 export class FaceDynamics {
   // The optional membrane experiment has not passed recovery validation yet.
-  constructor(geometry, { membrane = false } = {}) {
+  constructor(geometry, { membrane = false, asyncImpacts = true } = {}) {
     this.geometry = geometry;
     this.original = geometry.attributes.position.array.slice();
     this.rest = this.original.slice();
@@ -95,6 +96,11 @@ export class FaceDynamics {
     }
     this.lastImpact = null;
     this.regionPeaks = { cheeks: 0, nose: 0, lips: 0, forehead: 0, jaw: 0 };
+    if (asyncImpacts) this.enableAsyncImpacts();
+  }
+
+  enableAsyncImpacts() {
+    this.impactRig.enableAsync((model) => new ImpactPreparation(model));
   }
   // A landed punch reads over the top of a sentence rather than fighting it:
   // the speech rig is scaled down while an impact is at its loudest, then
@@ -222,13 +228,37 @@ export class FaceDynamics {
     ];
   }
 
+  // Manual expressions are constant between edits. Keep double precision here
+  // so the final Float32 position rounding matches the uncached calculation.
+  poseOffsets() {
+    const key = JSON.stringify(this.rig);
+    if (
+      this._poseRest !== this.rest ||
+      this._poseKey !== key ||
+      this._poseAnchors !== this.anchors
+    ) {
+      this._poseOffsets = new Float64Array(this.rest.length);
+      if (Object.values(this.rig).some((value) => value !== 0))
+        for (let i = 0; i < this.rest.length; i += 3)
+          this._poseOffsets.set(
+            this.rigDelta(this.rest[i], this.rest[i + 1], this.rest[i + 2]),
+            i,
+          );
+      this._poseRest = this.rest;
+      this._poseKey = key;
+      this._poseAnchors = this.anchors;
+    }
+    return this._poseOffsets;
+  }
+
   step(dt) {
     dt = clamp(dt, 0, 1 / 30);
     this.impactRig.step(dt);
     this.speechRig.step(dt, this.speechDuck);
+    const pose = this.poseOffsets();
     for (let i = 0; i < this.rest.length; i += 3) {
-      const d = this.rigDelta(this.rest[i], this.rest[i + 1], this.rest[i + 2]);
-      for (let j = 0; j < 3; j++) this.posedRest[i + j] = this.rest[i + j] + d[j];
+      for (let j = 0; j < 3; j++)
+        this.posedRest[i + j] = this.rest[i + j] + pose[i + j];
     }
     this.membrane?.refreshReference(this.posedRest);
     const n = Math.max(1, Math.ceil(dt / (1 / 120))),
@@ -323,6 +353,8 @@ export class FaceDynamics {
   }
 
   sculpt(point, amount, radius = 0.034) {
+    this.impactRig.restEdited();
+    this._poseRest = null;
     const ns = this.geometry.attributes.normal.array;
     for (let i = 0; i < this.rest.length; i += 3) {
       const d2 =
@@ -336,6 +368,7 @@ export class FaceDynamics {
 
   undo() {
     if (!this.history.length) return false;
+    this.impactRig.restEdited();
     this.future.push(this.rest.slice());
     this.rest = this.history.pop();
     this.resetMotion();
@@ -344,6 +377,7 @@ export class FaceDynamics {
 
   redo() {
     if (!this.future.length) return false;
+    this.impactRig.restEdited();
     this.history.push(this.rest.slice());
     this.rest = this.future.pop();
     this.resetMotion();
@@ -351,6 +385,8 @@ export class FaceDynamics {
   }
 
   resetMotion(clearPermanent = false) {
+    this.impactRig.cancelPreparation();
+    this._poseRest = null;
     this.offset.fill(0);
     this.velocity.fill(0);
     if (clearPermanent) this.impactRig.reset();
@@ -369,6 +405,10 @@ export class FaceDynamics {
     for (const k in this.rig) this.rig[k] = 0;
     this.resetMotion(true);
     this.step(0);
+  }
+
+  dispose() {
+    this.impactRig.dispose();
   }
 
   // Portable editable expression controls in exported glTF. These are heuristic

@@ -96,7 +96,80 @@ export class DeformationGradientRig {
     this.starts[this.count] = columns.length;
     this.columns = new Uint32Array(columns);
     this.values = new Float64Array(values);
+    this.triangleNodes = new Uint32Array(this.triangles.length * 3);
+    this.triangleData = new Float64Array(this.triangles.length * 13);
+    this.triangles.forEach(({ ids, gx, gy, area, t1, t2 }, i) => {
+      this.triangleNodes.set(
+        ids.map((id) => id * 3),
+        i * 3,
+      );
+      this.triangleData.set([...gx, ...gy, area, ...t1, ...t2], i * 13);
+    });
+    this.preparePreconditioner(rows);
     this.lastSolve = null;
+  }
+
+  // Incomplete LDLᵀ uses the existing sparsity pattern. It changes only how
+  // quickly CG converges, not the matrix, deformation limits, or residual goal.
+  preparePreconditioner(rows) {
+    const lower = rows.map((row, i) =>
+      [...row].filter(([j]) => j < i).sort((a, b) => a[0] - b[0]),
+    );
+    const diagonal = new Float64Array(this.count);
+    const lookup = lower.map(() => new Map());
+    for (let i = 0; i < this.count; i++) {
+      let pivot = this.diagonal[i];
+      for (const entry of lower[i]) {
+        const j = entry[0];
+        let value = entry[1];
+        for (const [k, lik] of lower[i]) {
+          if (k >= j) break;
+          value -= lik * diagonal[k] * (lookup[j].get(k) ?? 0);
+        }
+        entry[1] = value / diagonal[j];
+        lookup[i].set(j, entry[1]);
+        pivot -= entry[1] * entry[1] * diagonal[j];
+      }
+      // Unusual/ill-conditioned topology retains the original Jacobi path.
+      if (!Number.isFinite(pivot) || pivot <= this.diagonal[i] * 1e-10) return;
+      diagonal[i] = pivot;
+    }
+    const starts = new Uint32Array(this.count + 1),
+      columns = [],
+      values = [];
+    for (let i = 0; i < this.count; i++) {
+      starts[i] = columns.length;
+      for (const [j, value] of lower[i]) {
+        columns.push(j);
+        values.push(value);
+      }
+    }
+    starts[this.count] = columns.length;
+    this.preconditioner = {
+      starts,
+      columns: new Uint32Array(columns),
+      values: new Float64Array(values),
+      diagonal,
+    };
+  }
+
+  precondition(r, out) {
+    const factor = this.preconditioner;
+    if (!factor) {
+      for (let i = 0; i < this.count; i++) out[i] = r[i] / this.diagonal[i];
+      return;
+    }
+    const { starts, columns, values, diagonal } = factor;
+    for (let i = 0; i < this.count; i++) {
+      let value = r[i];
+      for (let k = starts[i]; k < starts[i + 1]; k++)
+        value -= values[k] * out[columns[k]];
+      out[i] = value;
+    }
+    for (let i = 0; i < this.count; i++) out[i] /= diagonal[i];
+    for (let i = this.count - 1; i >= 0; i--)
+      for (let k = starts[i]; k < starts[i + 1]; k++)
+        out[columns[k]] -= values[k] * out[i];
   }
 
   multiply(x, out) {
@@ -111,17 +184,18 @@ export class DeformationGradientRig {
   solve(rhs, x) {
     const r = new Float64Array(this.count),
       p = new Float64Array(this.count);
-    const ap = new Float64Array(this.count);
+    const ap = new Float64Array(this.count),
+      z = new Float64Array(this.count);
     this.multiply(x, ap);
     let rz = 0,
       initial = 0;
     for (let i = 0; i < this.count; i++) {
       r[i] = rhs[i] - ap[i];
-      p[i] = r[i] / this.diagonal[i];
-      rz += r[i] * p[i];
       initial += r[i] * r[i];
     }
     if (initial < 1e-24) return { iterations: 0, relativeResidual: 0 };
+    this.precondition(r, p);
+    for (let i = 0; i < this.count; i++) rz += r[i] * p[i];
     let iterations = 0,
       residual = initial;
     for (; iterations < 100 && residual > initial * 1e-6; iterations++) {
@@ -135,11 +209,12 @@ export class DeformationGradientRig {
       for (let i = 0; i < this.count; i++) {
         x[i] += alpha * p[i];
         r[i] -= alpha * ap[i];
-        next += (r[i] * r[i]) / this.diagonal[i];
         residual += r[i] * r[i];
       }
+      this.precondition(r, z);
+      for (let i = 0; i < this.count; i++) next += r[i] * z[i];
       const beta = next / rz;
-      for (let i = 0; i < this.count; i++) p[i] = r[i] / this.diagonal[i] + beta * p[i];
+      for (let i = 0; i < this.count; i++) p[i] = z[i] + beta * p[i];
       rz = next;
     }
     return { iterations, relativeResidual: Math.sqrt(residual / initial) };
@@ -158,20 +233,69 @@ export class DeformationGradientRig {
       for (let j = 0; j < 3; j++)
         rhs[i * 3 + j] = this.attachments[i] * target[i * 3 + j];
     let limitedTriangles = 0;
-    for (const { ids, gx, gy, area, t1, t2 } of this.triangles) {
-      const u = t1.slice(),
-        v = t2.slice();
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++) {
-          u[j] += gx[i] * target[ids[i] * 3 + j];
-          v[j] += gy[i] * target[ids[i] * 3 + j];
-        }
-      const bounded = boundedTangents(u, v, minimum, maximum);
-      limitedTriangles += Number(bounded.changed);
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-          rhs[ids[i] * 3 + j] +=
-            area * (gx[i] * (bounded.u[j] - t1[j]) + gy[i] * (bounded.v[j] - t2[j]));
+    const nodes = this.triangleNodes,
+      data = this.triangleData;
+    for (let f = 0, k = 0; f < nodes.length; f += 3, k += 13) {
+      let ux = data[k + 7],
+        uy = data[k + 8],
+        uz = data[k + 9];
+      let vx = data[k + 10],
+        vy = data[k + 11],
+        vz = data[k + 12];
+      for (let i = 0; i < 3; i++) {
+        const n = nodes[f + i],
+          gx = data[k + i],
+          gy = data[k + 3 + i];
+        ux += gx * target[n];
+        uy += gx * target[n + 1];
+        uz += gx * target[n + 2];
+        vx += gy * target[n];
+        vy += gy * target[n + 1];
+        vz += gy * target[n + 2];
+      }
+      // Same 2x2 singular-value projection as boundedTangents, without creating
+      // arrays/callbacks for every triangle in every contact.
+      const a = ux * ux + uy * uy + uz * uz;
+      const b = ux * vx + uy * vy + uz * vz;
+      const c = vx * vx + vy * vy + vz * vz;
+      const spread = Math.hypot(a - c, 2 * b);
+      const l1 = Math.sqrt(Math.max(0, (a + c + spread) * 0.5));
+      const l2 = Math.sqrt(Math.max(0, (a + c - spread) * 0.5));
+      if (l1 > maximum + 1e-6 || l2 < minimum - 1e-6) {
+        limitedTriangles++;
+        const angle = 0.5 * Math.atan2(2 * b, a - c),
+          cs = Math.cos(angle),
+          sn = Math.sin(angle);
+        const s1 = clamp(l1, minimum, maximum) / Math.max(l1, 1e-10);
+        const s2 = clamp(l2, minimum, maximum) / Math.max(l2, 1e-10);
+        const aa = cs * cs * s1 + sn * sn * s2,
+          ab = cs * sn * (s1 - s2),
+          bb = sn * sn * s1 + cs * cs * s2;
+        const nx = aa * ux + ab * vx,
+          ny = aa * uy + ab * vy,
+          nz = aa * uz + ab * vz;
+        vx = ab * ux + bb * vx;
+        vy = ab * uy + bb * vy;
+        vz = ab * uz + bb * vz;
+        ux = nx;
+        uy = ny;
+        uz = nz;
+      }
+      ux -= data[k + 7];
+      uy -= data[k + 8];
+      uz -= data[k + 9];
+      vx -= data[k + 10];
+      vy -= data[k + 11];
+      vz -= data[k + 12];
+      for (let i = 0; i < 3; i++) {
+        const n = nodes[f + i],
+          gx = data[k + i],
+          gy = data[k + 3 + i],
+          area = data[k + 6];
+        rhs[n] += area * (gx * ux + gy * vx);
+        rhs[n + 1] += area * (gx * uy + gy * vy);
+        rhs[n + 2] += area * (gx * uz + gy * vz);
+      }
     }
     let iterations = 0,
       relativeResidual = 0;
