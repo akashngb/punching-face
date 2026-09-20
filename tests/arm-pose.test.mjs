@@ -75,6 +75,30 @@ function fixture() {
 const near = (a, b, tolerance = 1e-6) =>
   assert.ok(a.distanceTo(b) < tolerance, `${a.toArray()} != ${b.toArray()}`);
 
+test('automatic guard calibration makes a tracked hand punch-ready', () => {
+  const video = { videoWidth: 960, videoHeight: 540, readyState: 0 },
+    tracking = new Tracking(video, () => {}, { autoCalibrate: true }),
+    hands = [new VirtualHand(-1), new VirtualHand(1)];
+  const landmarks = Array.from({ length: 21 }, (_, i) => ({
+    x: 0.65 + (i % 5) * 0.02,
+    y: 0.6 - Math.floor(i / 5) * 0.025,
+    z: 0,
+  }));
+  tracking.active = true;
+  tracking.calibration = new Map();
+  for (let frame = 0; frame < 6; frame++) {
+    tracking.results = {
+      timestamp: 1000 + frame * 20,
+      landmarks: [landmarks],
+      handedness: [[{ categoryName: 'Right', score: 0.99 }]],
+    };
+    tracking.tick(1005 + frame * 20, hands);
+  }
+  assert.equal(tracking.calibration.size, 1);
+  assert.equal(hands[0].tracked, true);
+  assert.equal(hands[0].calibrated, true);
+});
+
 test('body coordinates place each captured arm on the anatomical side and in front of the eye origin', () => {
   const f = fixture(),
     p = retargetCapturedArm(f.profile, f.frame, f.world, f.image, f.handWorld);

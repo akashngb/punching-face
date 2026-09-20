@@ -40,20 +40,22 @@ const quietGeneratedAssets = () => ({
 
 // Sentry browser profiling requires Document-Policy: js-profiling on the document response.
 // Adding it here (dev + preview) is the one prerequisite; the SDK does the rest via browserProfilingIntegration.
+// Block body on purpose: an implicit return hands Vite the connect app, which it then
+// calls as a post-hook with no request and crashes the server on startup.
+const configureServer = (server) => {
+  server.middlewares.use((req, res, next) => {
+    res.setHeader('Document-Policy', 'js-profiling');
+    if (req.url === '/cv-debug') {
+      res.statusCode = 302;
+      res.setHeader('Location', '/cv-debug/');
+      res.end();
+    } else next();
+  });
+};
 const jsProfilingHeader = () => ({
   name: 'sentry-js-profiling-header',
-  configureServer(server) {
-    server.middlewares.use((_req, res, next) => {
-      res.setHeader('Document-Policy', 'js-profiling');
-      next();
-    });
-  },
-  configurePreviewServer(server) {
-    server.middlewares.use((_req, res, next) => {
-      res.setHeader('Document-Policy', 'js-profiling');
-      next();
-    });
-  },
+  configureServer,
+  configurePreviewServer: configureServer,
 });
 
 export default defineConfig({
@@ -107,6 +109,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         design: fileURLToPath(new URL('./design.html', import.meta.url)),
+        cv: fileURLToPath(new URL('./cv-debug/index.html', import.meta.url)),
       },
     },
   },

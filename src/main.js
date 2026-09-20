@@ -20,7 +20,7 @@ import { ScannedArm } from './scanned-arm.js';
 import { HeadGlasses } from './head-accessories.js';
 import { HeadHair, remapHairRoots } from './head-hair.js';
 import { SurfaceAppearance, weldTexturedSurface } from './surface-appearance.js';
-import { refineSurface } from './surface.js';
+import { normalizeHead, refineSurface } from './surface.js';
 import { openMouthAperture, MouthCavity } from './mouth-aperture.js';
 import { detectFaceOnMesh, lastDetectorRender } from './lip-detect.js';
 import { VirtualHand, Tracking, makePhotoFace, cropFacePortrait } from './hands.js';
@@ -2775,19 +2775,6 @@ async function fitMouth(trustAnchors = false) {
 }
 const REFERENCE_HEAD_HEIGHT = 0.28;
 
-function normalizeHead(g) {
-  g.computeBoundingBox();
-  const b = g.boundingBox,
-    sz = new THREE.Vector3();
-  b.getSize(sz);
-  if (sz.y < 1e-6) return;
-  const c = b.getCenter(new THREE.Vector3()),
-    scale = REFERENCE_HEAD_HEIGHT / sz.y;
-  g.translate(-c.x, -c.y, -c.z);
-  g.scale(scale, scale, scale);
-  g.computeVertexNormals();
-  g.computeBoundingBox();
-}
 
 // Walk the mesh geometry to find facial landmarks. Assumes normalizeHead has been run so the mesh
 // is bbox-centered at origin, Y-up, face at +Z. Returns anchors keyed the same way as the rig's

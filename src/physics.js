@@ -134,6 +134,11 @@ export class FaceDynamics {
   }
 
   impulse(point, direction, speed, mode = 'hook', options = {}) {
+    if (mode === 'body') {
+      this.lastImpact = { point: point.clone(), direction: direction.clone() };
+      this.applyRecoil(point, direction, speed);
+      return 1;
+    }
     const magnitude = options.magnitude ?? clamp(speed / 1.4, 0, 0.9);
     const affectedRig = this.impactRig.impact(
       this.rest,

@@ -174,7 +174,7 @@ const open = (cx, cy, size) =>
   );
 
 test('a straight punch is a closed fist rushing the camera; waving, open hands and repeats are ignored', () => {
-  const detector = new PunchDetector();
+  const detector = new PunchDetector({ diagnostics: true });
   let event = null,
     time = 0;
   for (const size of [0.1, 0.1, 0.1, 0.125, 0.16, 0.2]) {
@@ -188,6 +188,17 @@ test('a straight punch is a closed fist rushing the camera; waving, open hands a
     "the thrower's right hand lands on the viewer-right of a head facing them",
   );
   assert.ok(event.speed >= 0.9 && event.speed <= 4);
+  assert.ok(
+    event.screenX > 0.5 && event.screenY > 0 && event.screenY < 1,
+    'impact keeps the palm position on the mirrored preview',
+  );
+  assert.ok(
+    event.direction.z < 0 &&
+      Math.abs(
+        Math.hypot(event.direction.x, event.direction.y, event.direction.z) - 1,
+      ) < 1e-9,
+    'impact direction is a unit vector into the target',
+  );
   assert.equal(
     detector.update('h', fist(0.3, 0.45, 0.26), (time += 33)),
     null,
@@ -227,6 +238,7 @@ test('a hook is fast sideways travel and lands on the side it came from, moving 
     event.u < 0 && event.lateral > 0,
     'a left hook lands viewer-left and travels right',
   );
+  assert.equal(event.direction, undefined, 'the normal guest event stays compact');
 });
 
 test('guest messages are clamped, rate limited and tolerant of garbage before touching physics', () => {

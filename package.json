@@ -22,7 +22,8 @@
     "test:sponsors": "node scripts/py.mjs tests/sponsor_server_test.py && node scripts/py.mjs tests/sponsor_obs_test.py",
     "omni:smoke": "node scripts/py.mjs scripts/omni_smoke_test.py",
     "omni:report": "node scripts/py.mjs scripts/omni_usage_report.py",
-    "omni:relay": "node scripts/py.mjs omni_relay.py"
+    "omni:relay": "node scripts/py.mjs omni_relay.py",
+    "test:ab": "node tests/ab-estimator.mjs"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.5.0",

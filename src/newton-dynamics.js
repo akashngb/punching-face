@@ -173,6 +173,11 @@ export class NewtonFaceDynamics extends FaceDynamics {
   }
 
   impulse(point, direction, speed, mode = 'hook', options = {}) {
+    if (mode === 'body') {
+      this.lastImpact = { point: point.clone(), direction: direction.clone() };
+      this.applyRecoil(point, direction, speed);
+      return 1;
+    }
     if ((!this.ready && this.headMode !== 'clay') || this.pending.length >= 2) return 0;
     const magnitude = options.magnitude ?? clamp(speed / 1.4, 0, 0.9);
     const affected = this.impactRig.impact(

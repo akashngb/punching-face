@@ -1,11 +1,12 @@
-// Guest-side punch detection from MediaPipe hand landmarks, run on the guest's own device.
-// Only a ~60-byte punch event crosses the network, never video, so a phone on venue Wi-Fi
-// still lands hits with data-channel latency. Speeds are monocular estimates, labelled as such.
-import { fistScore } from '../physics.js';
+// Guest adapter for the shared strike lifecycle. Landmarks are projected into
+// the same mirrored 2.5D interaction space; only the compact event crosses the network.
+import { fistScore, sweptEllipsoid } from '../physics.js';
+import { StrikeTracker } from '../strike-system.js';
 
 const PALM = [0, 5, 9, 13, 17],
-  HAND_LENGTH_M = 0.09,
-  NOMINAL_DISTANCE_M = 0.55;
+  TARGET = [0, 0, -0.415],
+  RADII = [0.28, 0.25, 0.09];
+const clamp = (value) => Math.max(-1, Math.min(1, value));
 
 export class PunchDetector {
   constructor({
@@ -13,65 +14,98 @@ export class PunchDetector {
     hookSpeed = 1.2,
     cooldownMs = 450,
     aspect = 16 / 9,
+    diagnostics = false,
   } = {}) {
-    Object.assign(this, { minSpeed, hookSpeed, cooldownMs, aspect, hands: new Map() });
+    Object.assign(this, {
+      minSpeed,
+      hookSpeed,
+      cooldownMs,
+      aspect,
+      diagnostics,
+      guards: new Map(),
+    });
+    this.tracker = new StrikeTracker({
+      startSpeed: minSpeed,
+      minInward: 0.12,
+      minFist: 0.5,
+      maxGapMs: 250,
+      rearmMs: cooldownMs,
+      rearmDistance: 0.05,
+      maxRecoverMs: cooldownMs * 2,
+    });
+    this.hands = this.tracker.hands;
   }
-
-  // landmarks: 21 normalised image points. Returns a punch event or null.
   update(key, landmarks, timeMs) {
-    const cx = PALM.reduce((s, i) => s + landmarks[i].x, 0) / PALM.length,
-      cy = PALM.reduce((s, i) => s + landmarks[i].y, 0) / PALM.length;
-    // Wrist to middle knuckle is rigid, so its image length tracks distance to the camera.
+    if (!landmarks?.length || !Number.isFinite(timeMs)) return null;
+    const cx = PALM.reduce((sum, index) => sum + landmarks[index].x, 0) / PALM.length,
+      cy = PALM.reduce((sum, index) => sum + landmarks[index].y, 0) / PALM.length;
     const scale = Math.hypot(
       (landmarks[9].x - landmarks[0].x) * this.aspect,
       landmarks[9].y - landmarks[0].y,
     );
-    const previous = this.hands.get(key);
-    const state = {
-      cx,
-      cy,
-      scale,
-      time: timeMs,
-      lastHit: previous?.lastHit ?? -Infinity,
-      speed: 0,
-    };
-    this.hands.set(key, state);
-    if (!previous || scale < 0.02) return null;
-    const dt = (timeMs - previous.time) / 1000;
-    if (dt <= 0 || dt > 0.25) return null;
-    const metresPerUnit = HAND_LENGTH_M / scale;
-    const vx = ((cx - previous.cx) * this.aspect * metresPerUnit) / dt,
-      vy = ((cy - previous.cy) * metresPerUnit) / dt;
-    // Growing hand = approaching camera. d is proportional to 1/scale, so dz/dt = d * (ds/dt)/s.
-    const vz = (NOMINAL_DISTANCE_M * ((scale - previous.scale) / dt)) / scale,
-      lateral = Math.hypot(vx, vy),
-      speed = Math.hypot(lateral, Math.max(0, vz));
-    // Smooth one step: a single noisy landmark frame should not throw a punch.
-    state.speed = previous.speed ? previous.speed * 0.4 + speed * 0.6 : speed;
-    if (timeMs - state.lastHit < this.cooldownMs || fistScore(landmarks) < 0.5)
-      return null;
-    const straight = vz > this.minSpeed * 0.6 && state.speed > this.minSpeed,
-      hook = lateral > this.hookSpeed && Math.abs(vx) > Math.abs(vy);
-    if (!straight && !hook) return null;
-    state.lastHit = timeMs;
-    // The camera image is unmirrored: the thrower's right hand sits at image-left, and it lands on the
-    // viewer-right side of a head that faces them. A hook lands on the side it came from, travelling across.
-    const u =
-        hook && !straight
-          ? Math.sign(vx) * 0.8
-          : Math.max(-1, Math.min(1, (0.5 - cx) * 2.2)),
-      v = Math.max(-1, Math.min(1, (0.5 - cy) * 1.6));
-    return {
+    const previous = this.tracker.hands.get(key);
+    if (!this.guards.has(key) || (previous && timeMs - previous.time > 250))
+      this.guards.set(key, scale);
+    const guard = Math.max(this.guards.get(key), 0.02),
+      ratio = scale / guard;
+    const position = [
+      (0.5 - cx) * this.aspect * 0.85,
+      (0.5 - cy) * 0.65,
+      -(0.3 + (ratio - 1) * 0.45),
+    ];
+    const motionTarget =
+      ratio > 1.08
+        ? [position[0], position[1], TARGET[2]]
+        : [0, position[1], position[2]];
+    const event = this.tracker.update(
+      {
+        hand: key,
+        position,
+        target: motionTarget,
+        timestamp: timeMs,
+        closed: fistScore(landmarks),
+        confidence: 1,
+      },
+      ({ from, to, radius }) => {
+        const t = sweptEllipsoid(from, to, TARGET, RADII, radius);
+        if (t === null) return null;
+        const point = from.map((value, index) => value + (to[index] - value) * t),
+          travel = to.map((value, index) => value - from[index]),
+          magnitude = Math.hypot(...travel) || 1;
+        return {
+          point,
+          direction: travel.map((value) => value / magnitude),
+          region: 'face',
+        };
+      },
+    );
+    if (!event) return null;
+    const hook = event.mode === 'hook',
+      u = clamp((0.5 - cx) * 2.2),
+      v = clamp((0.5 - cy) * 1.6);
+    const compact = {
       u,
       v,
-      lateral: hook ? Math.max(-1, Math.min(1, -vx / Math.max(lateral, 1e-6))) : 0,
-      speed: +Math.min(4, state.speed).toFixed(2),
+      lateral: hook ? clamp(event.direction[0]) : 0,
+      speed: +Math.min(4, event.speed).toFixed(2),
       side: cx < 0.5 ? 'right' : 'left',
-      kind: hook && !straight ? 'hook' : 'straight',
+      kind: hook ? 'hook' : 'straight',
+    };
+    if (!this.diagnostics) return compact;
+    return {
+      ...compact,
+      screenX: 1 - cx,
+      screenY: cy,
+      direction: {
+        x: event.direction[0],
+        y: event.direction[1],
+        z: event.direction[2],
+      },
     };
   }
 
   forget(key) {
-    this.hands.delete(key);
+    this.tracker.reset(key);
+    this.guards.delete(key);
   }
 }

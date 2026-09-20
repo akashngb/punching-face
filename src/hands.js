@@ -75,6 +75,9 @@ export class VirtualHand extends THREE.Group {
     this.lastHit = -10;
     this.closed = 1;
     this.tracked = false;
+    this.calibrated = false;
+    this.confidence = 0;
+    this.filteredPoints = null;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
       'position',
@@ -89,6 +92,7 @@ export class VirtualHand extends THREE.Group {
 
   apply(points, closed, armPose = null) {
     this.armPose = armPose;
+    this.points = points;
     this.previous.copy(this.center);
     this.closed = closed;
     this.center
@@ -119,7 +123,16 @@ export class VirtualHand extends THREE.Group {
     arr[k++] = elbow.z;
     this.line.geometry.attributes.position.needsUpdate = true;
   }
-
+  applyTracked(points, closed, sampleDt, reset = false, armPose = null) {
+    if (reset || !this.filteredPoints)
+      this.filteredPoints = points.map((p) => p.clone());
+    else {
+      const alpha = 1 - Math.exp(-sampleDt / 0.025);
+      for (let i = 0; i < points.length; i++)
+        this.filteredPoints[i].lerp(points[i], alpha);
+    }
+    this.apply(this.filteredPoints, closed, armPose);
+  }
   demoPose(center, closed = 0) {
     // Lerp between open-hand and fist landmark offsets by `closed` so demo triggers curl
     // the on-screen skeleton into a fist even when the webcam is off.
@@ -151,14 +164,16 @@ export function segment(mesh, a, b, radius) {
 }
 
 export class Tracking {
-  constructor(video, onStatus) {
+  constructor(video, onStatus, { autoCalibrate = false, targetDistance = 0.3 } = {}) {
     this.video = video;
     this.onStatus = onStatus;
+    this.autoCalibrate = autoCalibrate;
+    this.targetDistance = targetDistance;
     this.active = false;
     this.calibration = null;
     this.bodyFrame = null;
     this.armProfiles = new Map();
-    this.guardWidths = [];
+    this.guardWidths = new Map();
     this.results = null;
     this.stream = null;
     this.worker = null;
@@ -166,7 +181,9 @@ export class Tracking {
     this.pipelineLatency = 0;
     this.frameCallback = null;
   }
-
+  setTargetDistance(distance) {
+    if (Number.isFinite(distance)) this.targetDistance = distance;
+  }
   setArmProfile(profile) {
     this.armProfiles.set(profile.side, profile);
     this.calibration = null;
@@ -237,7 +254,8 @@ export class Tracking {
         }
       };
       this.active = true;
-      this.calibration = null;
+      this.calibration = this.autoCalibrate ? new Map() : null;
+      this.guardWidths.clear();
       this.scheduleFrame();
       // Body/pose tracking is lazy — only spun up when the user actually scans or loads an arm.
       // Eager-loading it here used to add ~30-50 ms per pose frame on top of the hand landmark
@@ -260,6 +278,7 @@ export class Tracking {
     this.poseReady = false;
     this.appliedTimestamp = 0;
     this.calibration = null;
+    this.guardWidths.clear();
     this.bodyFrame = null;
     this.captureRequest = null;
     this.frameCallback = null;
@@ -333,14 +352,32 @@ export class Tracking {
       throw new Error(
         'Personal arms need a clear view of your face, shoulders, elbows and wrists to calibrate.',
       );
-    this.calibration =
-      hands
-        .map((lm) => Math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y))
-        .reduce((a, b) => a + b, 0) / hands.length;
+    const next = this.calibration instanceof Map ? this.calibration : new Map(),
+      assignments = matchHandsToBody(
+        hands,
+        pose?.landmarks?.[0],
+        this.video.videoWidth / this.video.videoHeight || 1,
+      );
+    hands.forEach((lm, i) => {
+      const matched = assignments.get(i),
+        side = matched
+          ? matched === 'left'
+            ? -1
+            : 1
+          : this.results.handedness?.[i]?.[0]?.categoryName === 'Left'
+            ? 1
+            : -1;
+      next.set(side, Math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y));
+    });
+    this.calibration = next;
+    const label = [...next.keys()]
+      .sort()
+      .map((side) => (side < 0 ? 'left' : 'right'))
+      .join(' + ');
     this.onStatus(
       this.armProfiles.size
         ? 'Personal proportions calibrated · body and palm tracking drive the captured meshes'
-        : 'Guard calibrated · close your fist and move across the target',
+        : `${label} guard calibrated · close your fist and strike the target`,
     );
   }
 
@@ -376,14 +413,13 @@ export class Tracking {
     // Ingest is driven by requestVideoFrameCallback in scheduleFrame(); tick() only
     // applies the latest inference result to the hand rigs.
     this.scheduleFrame();
-    // Only fully hide a hand when tracking has been silent for >1 s. Between-frame gaps of a few
-    // hundred ms happen constantly with MediaPipe — flipping visible on/off each of those gaps
-    // is what caused the on-screen skeleton to strobe.
-    if (!this.results || now - this.results.timestamp > 1000) {
+    if (!this.results || now - this.results.timestamp > 350) {
       for (const h of hands) {
         h.tracked = false;
         h.visible = false;
         h.armPose = null;
+        h.filteredPoints = null;
+        h.calibrated = false;
       }
       return;
     }
@@ -449,19 +485,40 @@ export class Tracking {
         if (!pose) return;
         h.visible = true;
         h.tracked = true;
-        h.apply(pose.joints.slice(3), fistScore(lm), pose);
-        h.sampleDt = sampleDt;
+        h.calibrated = true;
+        h.confidence = this.results.handedness?.[i]?.[0]?.score ?? 1;
         h.updated = previouslyTracked.get(h.side) === true;
+        h.applyTracked(pose.joints.slice(3), fistScore(lm), sampleDt, !h.updated, pose);
+        h.sampleDt = sampleDt;
         if (!h.updated) h.previous.copy(h.center);
         return;
       }
       const width = Math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y);
-      const ratio = this.calibration ? width / this.calibration : 1;
-      // Rest is now ~48 cm from the origin camera so hands hover close to the face at z=-0.55
-      // instead of near the lens. A moderate punch (ratio ≈ 1.2) lands past the face; a big
-      // reach (ratio ≈ 1.5) drives the mesh through it. Floor 0.38 keeps recovery well inside
-      // the near-fade's opaque band so the hand never sits inside the camera's near plane.
-      const depth = clamp(0.48 + (ratio - 1) * 0.35, 0.38, 0.85);
+      if (
+        this.autoCalibrate &&
+        this.calibration instanceof Map &&
+        !this.calibration.has(side)
+      ) {
+        const samples = this.guardWidths.get(side) ?? [];
+        samples.push(width);
+        this.guardWidths.set(side, samples);
+        if (samples.length >= 6)
+          this.calibration.set(
+            side,
+            samples.reduce((sum, value) => sum + value, 0) / samples.length,
+          );
+      }
+      const guardWidth =
+          this.calibration instanceof Map ? this.calibration.get(side) : null,
+        ratio = guardWidth ? width / guardWidth : 1;
+      // Monocular Z is only a calibrated interaction proxy: palm growth moves the
+      // rendered fist from guard toward the same target distance used by collision.
+      const guardDepth = Math.max(0.12, this.targetDistance - 0.2);
+      const depth = clamp(
+        guardDepth + (ratio - 1) * 0.45,
+        0.1,
+        this.targetDistance + 0.25,
+      );
       const base = new THREE.Vector3(
         (0.5 - centerX) * 0.85,
         clamp((0.55 - lm[9].y) * 0.65, -0.3, 0.16),
@@ -476,11 +533,13 @@ export class Tracking {
             base.z + (p.z - lm[9].z) * unit,
           ),
       );
+      h.updated = previouslyTracked.get(h.side) === true;
       h.visible = true;
       h.tracked = true;
-      h.apply(points, fistScore(lm));
+      h.calibrated = !!guardWidth;
+      h.confidence = this.results.handedness?.[i]?.[0]?.score ?? 1;
+      h.applyTracked(points, fistScore(lm), sampleDt, !h.updated);
       h.sampleDt = sampleDt;
-      h.updated = previouslyTracked.get(h.side) === true;
       if (!h.updated) h.previous.copy(h.center);
     });
   }

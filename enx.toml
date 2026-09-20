@@ -1,0 +1,56 @@
+# enx project configuration
+    # Example: name = "my-app"
+    # Example: steps = ["cmd1", "cmd2"]
+    # Example: [tasks.test]
+
+[project]
+# display name shown in `enx projects`
+name = "punching-face"
+
+# [env] maps environment name -> dotenv file path.
+# `enx env <name>` looks up the name here and loads that file.
+[env]
+# dev = ".env"
+# staging = ".env.staging"
+
+# [up] uses a list of shell commands run by `enx up`.
+[up]
+steps = [
+    # "npm install",
+    # "docker compose up -d",
+]
+
+# [down] uses a list of shell commands run by `enx down`.
+[down]
+steps = [
+    # "docker compose down",
+]
+
+# [start] uses a list of shell commands run by `enx start`.
+[start]
+commands = [
+    # "npm run dev",
+]
+
+# [tasks] must use nested tables per task.
+# valid:
+#   [tasks.test]
+#   command = "npm test"
+#   description = "Run tests"
+#
+# invalid (will fail to parse):
+#   [tasks]
+#   test = "npm test"
+#
+# If the task name contains special characters (like ':'), quote the table key:
+# [tasks."db:migrate"]
+# command = "npx prisma migrate dev"
+[tasks.test]
+command = "echo \"define your test command\""
+description = "Run test suite"
+
+# [open] maps target name -> URL or shell command for `enx open <target>`.
+[open]
+# repo = "https://github.com/myorg/my-repo"
+# code = "code ."
+# docs = "https://docs.example.com"
